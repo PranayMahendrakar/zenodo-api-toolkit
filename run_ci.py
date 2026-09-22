@@ -142,6 +142,23 @@ def published_dois() -> set[str]:
     return out
 
 
+def draft_doi(path: str) -> str | None:
+    """The DOI recorded in one draft's front matter, if it has one."""
+    m = re.search(r"(?m)^doi:\s*(\S+)", front_matter(path))
+    return m.group(1) if m else None
+
+
+def resume_succeeded(rc: int, minted: str | None) -> bool:
+    """Did finishing an existing draft actually mint ITS DOI?
+
+    The question deliberately concerns the draft, not the day. "Does today
+    have a published paper" is what made this wrong: with --ignore-completed
+    the day already has one, so that question answers yes even when the
+    publish just failed - reporting success, and naming the wrong DOI.
+    """
+    return rc == 0 and bool(minted)
+
+
 def todays_published_doi(today: str | None = None) -> str | None:
     """Today's paper, if it is already out.
 
@@ -334,9 +351,9 @@ def main(argv: list[str] | None = None) -> int:
     pending = todays_pending_draft()
     if pending and not args.stage_only:
         rc = publish_existing(pending)
-        after = todays_published_doi()
-        if after:
-            note("OK: published %s - https://doi.org/%s" % (after, after))
+        minted = draft_doi(pending)
+        if resume_succeeded(rc, minted):
+            note("OK: published %s - https://doi.org/%s" % (minted, minted))
             note("----- run finished -----")
             return 0
         note("FAILED: could not publish today's existing draft (exit %d)." % rc)

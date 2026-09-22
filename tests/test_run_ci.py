@@ -97,6 +97,22 @@ check("a transient failure that still minted a DOI is not retried",
 check("an auth failure is never retried",
       run_ci.should_retry("terminal", minted=False, drafted=False), False)
 
+
+# ── finishing an existing draft: ask about the DRAFT, not the day ───────
+# 22 Sep 2026, publishing a deliberate second paper: the success test was
+# "does today have a published DOI". With --ignore-completed the day already
+# had one, so that answered yes no matter what the publish did. The run
+# reported OK and printed the MORNING's DOI for a paper it had just minted a
+# different DOI for - and would have reported OK had it failed outright.
+check("a resume that minted a DOI succeeded",
+      run_ci.resume_succeeded(0, "10.5281/zenodo.22901280"), True)
+check("a resume that minted nothing failed",
+      run_ci.resume_succeeded(0, None), False)
+check("a nonzero exit is a failure even with a DOI present",
+      run_ci.resume_succeeded(1, "10.5281/zenodo.22901280"), False)
+check("a nonzero exit with no DOI is a failure",
+      run_ci.resume_succeeded(1, None), False)
+
 # ── completion guard, against synthetic drafts ──────────────────────────
 tmp = tempfile.mkdtemp(prefix="run_ci_test_")
 real_drafts = run_ci.DRAFTS
@@ -131,6 +147,11 @@ check("a finished day has nothing pending",
       run_ci.todays_pending_draft("2026-09-22"), None)
 check("a day with no draft at all has nothing pending",
       run_ci.todays_pending_draft("2026-09-21"), None)
+
+check("the DOI is read from the draft that has it",
+      run_ci.draft_doi(os.path.join(tmp, "published.md")), "10.5281/zenodo.22884949")
+check("a draft with no DOI reads as none",
+      run_ci.draft_doi(os.path.join(tmp, "staged.md")), None)
 
 check("every DOI on disk is collected",
       run_ci.published_dois(),
