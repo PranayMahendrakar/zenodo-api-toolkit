@@ -1,0 +1,142 @@
+name: Daily paper
+
+# This repository is public, so Actions minutes are free. The papers are not
+# public: the drafts, the run log and the procedure live in a private content
+# repository that this workflow clones at run time and pushes back to.
+#
+# Two consequences of being public, both deliberate:
+#
+#   * the run is invoked with --quiet. The session transcript IS the paper, and
+#     a public workflow log is world-readable. It still goes to runner.log,
+#     which is committed to the private repo.
+#   * there is no upload-artifact step. Artifacts on a public repository can be
+#     downloaded by anyone, which would publish the draft just as surely.
+#
+# 05:00 IST is the primary slot; the rest are the retry window behind it. A
+# later attempt is cheap and almost never does real work - on a finished day
+# the completion guard exits in about a tenth of a second. When the morning
+# failed it resumes rather than restarts: if a draft already exists it
+# publishes that draft instead of writing a second paper, so nothing already
+# written is thrown away.
+on:
+  schedule:
+    - cron: "30 23 * * *"   # 05:00 IST - primary
+    - cron: "30 2 * * *"    # 08:00 IST
+    - cron: "30 5 * * *"    # 11:00 IST
+    - cron: "30 8 * * *"    # 14:00 IST
+    - cron: "30 11 * * *"   # 17:00 IST
+    - cron: "30 14 * * *"   # 20:00 IST
+    - cron: "30 17 * * *"   # 23:00 IST
+  workflow_dispatch:
+    inputs:
+      stage_only:
+        description: "Draft and gate, but publish nothing (a DOI cannot be withdrawn)"
+        type: boolean
+        default: true
+
+# Never two at once. Two concurrent runs would each draft a paper, and the
+# completion guard only helps the one that starts second.
+concurrency:
+  group: daily-paper
+  cancel-in-progress: false
+
+# Nothing is written back to THIS repository - the content repo is written via
+# PAPERS_TOKEN instead - so the default GITHUB_TOKEN needs no write access.
+permissions:
+  contents: read
+
+jobs:
+  write:
+    runs-on: ubuntu-latest
+    # A paper is 30-90 minutes. Generous rather than tight, so a slow citation
+    # gate does not lose the work, but bounded so a hung session cannot burn
+    # six hours.
+    timeout-minutes: 150
+
+    steps:
+      - name: Check out the toolkit
+        uses: actions/checkout@v7
+        with:
+          path: toolkit
+
+      # Full clone, not --depth 1: this checkout is pushed back at the end and
+      # a shallow history can be rejected on push.
+      - name: Check out the papers
+        env:
+          PAPERS_REPO: ${{ secrets.PAPERS_REPO }}
+          PAPERS_TOKEN: ${{ secrets.PAPERS_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${PAPERS_TOKEN}@github.com/${PAPERS_REPO}.git" papers
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      # claude_flags.py allows Bash(python:*), not python3 - setup-python puts
+      # `python` on PATH, which is what makes that work on Linux.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymupdf markdown requests
+
+      - name: Install Claude Code
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # The two halves meet here. run_ci.py resolves its paths from its own
+      # location, so copying the tools into the content checkout is what makes
+      # drafts/, topics.md and DAILY_RUN.md resolve without any path plumbing.
+      - name: Assemble the working tree
+        run: |
+          cp toolkit/*.py papers/
+          mkdir -p papers/tests
+          cp toolkit/tests/*.py papers/tests/
+
+      - name: Sanity check
+        working-directory: papers
+        env:
+          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: python run_ci.py --check
+
+      - name: Unit tests
+        working-directory: papers
+        run: python tests/test_run_ci.py
+
+      - name: Write the paper
+        working-directory: papers
+        env:
+          ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CROSSREF_MAILTO: ${{ secrets.CROSSREF_MAILTO }}
+          # A paper takes far longer than the 600s default ceiling. If the
+          # session ever puts work in the background, wait for it rather than
+          # killing it ten minutes in - which is exactly how the 22 Sep run
+          # died. 0 means wait; timeout-minutes above is the real bound.
+          CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0"
+        run: |
+          if [ "${{ inputs.stage_only }}" = "true" ]; then
+            python run_ci.py --quiet --stage-only
+          else
+            python run_ci.py --quiet
+          fi
+
+      # The run mutates content - the draft, the queue, the logs. Push it back
+      # or the next run starts from stale state and re-picks the same topic.
+      # runner.log is force-added: it is gitignored for local runs, but with
+      # --quiet it is the only place the transcript exists.
+      - name: Push the results back
+        if: always()
+        working-directory: papers
+        run: |
+          git config user.name  "zenodo-daily-paper[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A drafts topics.md daily_log.md published_records.md zenodo_stats_history.csv || true
+          git add -f runner.log || true
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+          else
+            git commit -m "daily paper: $(date -u +%Y-%m-%d)"
+            git push
+          fi

@@ -1,0 +1,65 @@
+# --- added by bulk import ---
+.venv*/
+venv*/
+env/
+.env
+.env.*
+!.env.example
+node_modules/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.tox/
+.ipynb_checkpoints/
+.idea/
+.vs/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+desktop.ini
+dist/
+build/
+target/
+*.egg-info/
+.next/
+.nuxt/
+.dart_tool/
+.gradle/
+coverage/
+*.log
+logs/
+tmp_out/
+hf-cache/
+.cache/
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.ppk
+id_rsa*
+id_ed25519*
+credentials*.json
+client_secret*.json
+service_account*.json
+service-account*.json
+token.json
+token.pickle
+*token.pickle
+secrets.*
+keys.env
+.npmrc
+.pypirc
+.netrc
+
+# --- pipeline scratch ---
+# Papers and run logs live in the private content repo, not here. These rules
+# stay so a local working copy of this toolkit, used against a content tree in
+# the same directory, cannot commit drafts or transcripts by accident.
+_scratch_*
+_tmp_*
+runner.log
+drafts/
+daily_log.md
