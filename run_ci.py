@@ -268,6 +268,22 @@ def main(argv: list[str] | None = None) -> int:
         else:
             would = "write a new paper"
         note("check: would            = %s" % would)
+
+        # A diagnostic that prints MISSING and then reports success is the
+        # same mistake as a gate that cannot run and calls itself passed. In
+        # CI this step exists to catch an unset secret BEFORE an hour of work
+        # starts, so a missing prerequisite has to fail here.
+        missing = [n for n, ok in (
+            ("claude CLI", bool(find_cli())),
+            ("ZENODO_TOKEN", bool(os.environ.get("ZENODO_TOKEN")
+                                  or os.environ.get("ZENODO_ACCESS_TOKEN"))),
+            ("a Claude credential", bool(os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+                                         or os.environ.get("ANTHROPIC_API_KEY"))),
+        ) if not ok]
+        if missing:
+            note("check: FAILED - missing %s" % ", ".join(missing))
+            note("----- run finished -----")
+            return 1
         note("----- run finished -----")
         return 0
 
