@@ -142,6 +142,35 @@ def published_dois() -> set[str]:
     return out
 
 
+DAILY_TARGET = 2          # papers per day
+EVENING_HOUR = 19         # IST; the hour the second slot opens
+
+
+def todays_published_count(today=None):
+    """How many of today's drafts already carry a DOI."""
+    today = today or _dt.date.today().isoformat()
+    n = 0
+    for f in drafts_md():
+        head = front_matter(f)
+        dated = re.search(r"(?m)^date:\s*" + re.escape(today) + r"\b", head)
+        if dated and re.search(r"(?m)^doi:\s*\S+", head):
+            n += 1
+    return n
+
+
+def target_for(now: _dt.datetime | None = None) -> int:
+    """How many papers should exist by this point in the day.
+
+    One after the morning slot, two after the evening slot - NOT simply
+    DAILY_TARGET all day. A flat target would make the morning's retry at
+    08:00 see "one of two done" and immediately write the evening paper,
+    collapsing the spacing between two papers that topics.md builds in on
+    purpose.
+    """
+    now = now or _dt.datetime.now()
+    return DAILY_TARGET if now.hour >= EVENING_HOUR else 1
+
+
 def draft_doi(path: str) -> str | None:
     """The DOI recorded in one draft's front matter, if it has one."""
     m = re.search(r"(?m)^doi:\s*(\S+)", front_matter(path))
@@ -265,6 +294,11 @@ def main(argv: list[str] | None = None) -> int:
     note("----- run starting%s -----" % (" (stage-only)" if args.stage_only else ""))
 
     already = todays_published_doi()
+    done_today = todays_published_count()
+    target = target_for()
+    # "Enough for now", not "any at all": with two slots a day the question is
+    # whether this slot's paper exists, not whether the day has one.
+    satisfied = done_today >= target
 
     # --check reports state and stops. It runs before the completion guard on
     # purpose: on a finished day the guard would exit first, and a diagnostic
@@ -279,12 +313,13 @@ def main(argv: list[str] | None = None) -> int:
                                                else "MISSING"))
         note("check: drafts           = %d (%d carry a DOI)"
              % (len(drafts_md()), len(published_dois())))
-        note("check: today published  = %s" % (already or "no"))
+        note("check: today published  = %d of %d wanted by now%s"
+             % (done_today, target, (" (latest %s)" % already) if already else ""))
         note("check: today pending    = %s"
              % (os.path.basename(todays_pending_draft() or "") or "no"))
         note("check: mode             = %s" % ("stage-only" if args.stage_only else "publish"))
-        if already and not args.stage_only:
-            would = "skip (finished day)"
+        if satisfied and not args.stage_only:
+            would = "skip (this slot's paper is already out)"
         elif todays_pending_draft() and not args.stage_only:
             would = "publish today's existing draft (no new paper)"
         else:
@@ -317,15 +352,18 @@ def main(argv: list[str] | None = None) -> int:
     # from the schedule, and it overrides ONLY the "one paper a day" rule. The
     # citation gate and the duplicate-title check are untouched and still have
     # to pass before anything is minted.
-    if already and args.ignore_completed and not args.stage_only:
-        note("Today already published %s." % already)
+    if satisfied and args.ignore_completed and not args.stage_only:
+        note("Today already has %d paper(s), which meets the target of %d for now."
+             % (done_today, target))
         note("        --ignore-completed was passed, so continuing anyway and")
-        note("        publishing a SECOND paper for today. The citation gate and")
+        note("        publishing an EXTRA paper for today. The citation gate and")
         note("        duplicate check still apply.")
-    elif already and not args.stage_only:
-        note("Today's paper is already published: %s" % already)
-        note("        https://doi.org/%s" % already)
-        note("        Nothing to do - a second launch on a finished day is a no-op.")
+    elif satisfied and not args.stage_only:
+        note("Today already has %d paper(s) of the %d wanted by this hour."
+             % (done_today, target))
+        if already:
+            note("        latest: https://doi.org/%s" % already)
+        note("        Nothing to do - this slot is finished.")
         note("----- run finished -----")
         return 0
 

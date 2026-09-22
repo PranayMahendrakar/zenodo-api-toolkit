@@ -12,21 +12,29 @@ name: Daily paper
 #   * there is no upload-artifact step. Artifacts on a public repository can be
 #     downloaded by anyone, which would publish the draft just as surely.
 #
-# 05:00 IST is the primary slot; the rest are the retry window behind it. A
-# later attempt is cheap and almost never does real work - on a finished day
-# the completion guard exits in about a tenth of a second. When the morning
-# failed it resumes rather than restarts: if a draft already exists it
-# publishes that draft instead of writing a second paper, so nothing already
-# written is thrown away.
+# Two papers a day: one at 05:00 IST, one at 19:00 IST, each with retries
+# behind it. The guard is slot-aware rather than a flat count - before 19:00
+# one paper is enough, after 19:00 two are - so a morning retry cannot run
+# ahead and write the evening paper at 08:00.
+#
+# A later attempt is cheap and almost never does real work: when its slot is
+# already satisfied the guard exits in about a tenth of a second. When the
+# slot failed it resumes rather than restarts - if a draft already exists it
+# publishes that draft instead of writing another, so nothing already written
+# is thrown away.
 on:
   schedule:
-    - cron: "30 23 * * *"   # 05:00 IST - primary
-    - cron: "30 2 * * *"    # 08:00 IST
-    - cron: "30 5 * * *"    # 11:00 IST
-    - cron: "30 8 * * *"    # 14:00 IST
-    - cron: "30 11 * * *"   # 17:00 IST
-    - cron: "30 14 * * *"   # 20:00 IST
-    - cron: "30 17 * * *"   # 23:00 IST
+    # Times are IST; cron is UTC, so each is 5h30 earlier. TZ below makes the
+    # runner agree, which matters: at 23:30 UTC a UTC-minded runner thinks the
+    # hour is 23 and that both papers are due, when it is actually 05:00 IST
+    # and only the morning one is.
+    - cron: "30 23 * * *"   # 05:00 IST - MORNING paper
+    - cron: "30 2 * * *"    # 08:00 IST - morning retry
+    - cron: "30 5 * * *"    # 11:00 IST - morning retry
+    - cron: "30 8 * * *"    # 14:00 IST - morning retry
+    - cron: "30 13 * * *"   # 19:00 IST - EVENING paper
+    - cron: "30 15 * * *"   # 21:00 IST - evening retry
+    - cron: "30 17 * * *"   # 23:00 IST - evening retry
   workflow_dispatch:
     inputs:
       stage_only:
@@ -52,6 +60,11 @@ permissions:
 jobs:
   write:
     runs-on: ubuntu-latest
+    # Everything downstream reasons in IST - which date a paper belongs to, and
+    # whether the evening slot has opened. The runner is UTC by default, where
+    # the 05:00 IST slot falls on the PREVIOUS date and reads as hour 23.
+    env:
+      TZ: Asia/Kolkata
     # A paper is 30-90 minutes. Generous rather than tight, so a slow citation
     # gate does not lose the work, but bounded so a hung session cannot burn
     # six hours.

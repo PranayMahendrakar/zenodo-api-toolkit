@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+from datetime import datetime as _dtm
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import run_ci
@@ -153,9 +154,41 @@ check("the DOI is read from the draft that has it",
 check("a draft with no DOI reads as none",
       run_ci.draft_doi(os.path.join(tmp, "staged.md")), None)
 
+# ── two papers a day, one per slot ──────────────────────────────────────
+write("evening.md", "2026-09-22", "10.5281/zenodo.22901280")   # 2nd for the day
+
+check("both of today's published papers are counted",
+      run_ci.todays_published_count("2026-09-22"), 2)
+check("a day with one paper counts one",
+      run_ci.todays_published_count("2026-09-19"), 1)
+check("a day with only an unpublished draft counts none",
+      run_ci.todays_published_count("2026-09-20"), 0)
+
+# Before the evening slot opens, ONE paper is the whole target. A flat target
+# of 2 would make the 08:00 retry see "one of two" and write the evening paper
+# in the morning, collapsing the spacing topics.md builds in on purpose.
+for hh in (0, 5, 8, 11, 14, 18):
+    check("at %02d:00 IST the target is 1" % hh,
+          run_ci.target_for(_dtm(2026, 9, 22, hh, 0)), 1)
+for hh in (19, 21, 23):
+    check("at %02d:00 IST the target is 2" % hh,
+          run_ci.target_for(_dtm(2026, 9, 22, hh, 0)), 2)
+
+# The scenarios that actually decide whether a run does work.
+def satisfied(count, hour):
+    return count >= run_ci.target_for(_dtm(2026, 9, 22, hour, 0))
+
+check("05:00 with nothing published -> work",       satisfied(0, 5), False)
+check("08:00 retry after the morning ran -> skip",  satisfied(1, 8), True)
+check("08:00 retry after a failed morning -> work", satisfied(0, 8), False)
+check("19:00 with the morning done -> work",        satisfied(1, 19), False)
+check("21:00 with both done -> skip",               satisfied(2, 21), True)
+check("21:00 with only one done -> work",           satisfied(1, 21), False)
+
 check("every DOI on disk is collected",
       run_ci.published_dois(),
-      {"10.5281/zenodo.22884949", "10.5281/zenodo.22840565"})
+      {"10.5281/zenodo.22884949", "10.5281/zenodo.22840565",
+       "10.5281/zenodo.22901280"})
 
 run_ci.DRAFTS = real_drafts
 

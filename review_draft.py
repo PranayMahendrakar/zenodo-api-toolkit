@@ -126,7 +126,8 @@ def main():
         rule()
         print("  CITATIONS")
         rule()
-        n = len(set(re.findall(r"10\.\d{4,9}/\S+", text))) +             len(set(re.findall(r"(?i)arxiv[:/]\s*(\d{4}\.\d{4,5})", text)))
+        n = (len(set(re.findall(r"\b10\.\d{4,9}/\S+", text)))
+             + len(set(re.findall(r"(?i)arxiv[:/]\s*(\d{4}\.\d{4,5})", text))))
         delay = float(args[args.index("--delay") + 1]) if "--delay" in args else 2.5
         est = int(n * delay)
         print("  ~%d identifiers to verify against Crossref and arXiv" % n)
