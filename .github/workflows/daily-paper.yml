@@ -168,12 +168,21 @@ jobs:
         run: |
           # --quiet always: this log is public and the transcript is the paper.
           flags="--quiet"
-          if [ "${{ inputs.stage_only }}" = "true" ]; then
+
+          # A scheduled run ALWAYS publishes. Keyed on the event, not on the
+          # input being empty: stage_only is declared `default: true`, and if
+          # that default ever reached a scheduled run the whole pipeline would
+          # stage every night and publish nothing - quietly, looking healthy,
+          # with a green tick. The event name cannot be ambiguous that way.
+          if [ "${{ github.event_name }}" != "schedule" ] \
+             && [ "${{ inputs.stage_only }}" = "true" ]; then
             flags="$flags --stage-only"
           fi
-          # Reachable only from workflow_dispatch. On a scheduled run the input
-          # is empty, so the completion guard always applies to the daily job.
-          if [ "${{ inputs.ignore_completed }}" = "true" ]; then
+
+          # Manual only, for the same reason: never reachable from the
+          # schedule, so the one-paper-per-slot guard always applies nightly.
+          if [ "${{ github.event_name }}" != "schedule" ] \
+             && [ "${{ inputs.ignore_completed }}" = "true" ]; then
             flags="$flags --ignore-completed"
           fi
           echo "running: python run_ci.py $flags"
