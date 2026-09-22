@@ -59,6 +59,39 @@ jobs:
         with:
           path: toolkit
 
+      # "Authentication failed" on the clone cannot tell a bad token from a
+      # good token that was never granted this repository, and those have
+      # opposite fixes. Ask the API first and say which it is. Only HTTP
+      # status codes are printed - never the token.
+      - name: Check the papers token
+        env:
+          PAPERS_REPO: ${{ secrets.PAPERS_REPO }}
+          PAPERS_TOKEN: ${{ secrets.PAPERS_TOKEN }}
+        run: |
+          if [ -z "${PAPERS_TOKEN}" ]; then
+            echo "PAPERS_TOKEN is not set on this repository."
+            exit 1
+          fi
+          who=$(curl -s -o /dev/null -w '%{http_code}'                   -H "Authorization: Bearer ${PAPERS_TOKEN}"                   https://api.github.com/user)
+          repo=$(curl -s -o /dev/null -w '%{http_code}'                   -H "Authorization: Bearer ${PAPERS_TOKEN}"                   "https://api.github.com/repos/${PAPERS_REPO}")
+          echo "token identity check : HTTP ${who}"
+          echo "repository access    : HTTP ${repo}"
+          if [ "${who}" != "200" ]; then
+            echo ""
+            echo "The token itself was rejected. It is expired, revoked, or the"
+            echo "wrong value was pasted into PAPERS_TOKEN - check it is the"
+            echo "fine-grained PAT and not another token."
+            exit 1
+          fi
+          if [ "${repo}" != "200" ]; then
+            echo ""
+            echo "The token is valid but cannot see this repository. Grant it"
+            echo "Contents: Read and write, with the private papers repo"
+            echo "explicitly selected under 'Only select repositories'."
+            exit 1
+          fi
+          echo "OK - the token can read the papers repository."
+
       # Full clone, not --depth 1: this checkout is pushed back at the end and
       # a shallow history can be rejected on push.
       - name: Check out the papers
@@ -128,8 +161,12 @@ jobs:
       # --quiet it is the only place the transcript exists.
       - name: Push the results back
         if: always()
-        working-directory: papers
         run: |
+          if [ ! -d papers/.git ]; then
+            echo "No papers checkout - nothing to push."
+            exit 0
+          fi
+          cd papers
           git config user.name  "zenodo-daily-paper[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A drafts topics.md daily_log.md published_records.md zenodo_stats_history.csv || true
