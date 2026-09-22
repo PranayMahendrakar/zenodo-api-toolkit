@@ -8,6 +8,8 @@ import sys, time, json, textwrap
 import urllib.parse, urllib.request
 import xml.etree.ElementTree as ET
 
+import requests
+
 # Windows console defaults to cp1252 and dies on accented author names.
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -19,8 +21,14 @@ UA = {"User-Agent": "daily-paper-run/1.0 (citation verification)"}
 
 
 def _get(url, timeout=45):
-    req = urllib.request.Request(url, headers=UA)
-    return urllib.request.urlopen(req, timeout=timeout).read()
+    """Fetch bytes.
+
+    Through requests, not urllib: export.arxiv.org answers urllib with HTTP
+    406 regardless of headers, while requests gets 200 for the same URL.
+    """
+    resp = requests.get(url, headers=UA, timeout=timeout)
+    resp.raise_for_status()
+    return resp.content
 
 
 def _entries(xml_bytes):

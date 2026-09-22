@@ -6,6 +6,8 @@ output small. Full verification still goes through ax_lookup.py.
 import sys, time, urllib.parse, urllib.request
 import xml.etree.ElementTree as ET
 
+import requests
+
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
@@ -15,12 +17,21 @@ ATOM = "{http://www.w3.org/2005/Atom}"
 UA = {"User-Agent": "daily-paper-run/1.0 (citation verification)"}
 
 
+def _get(url, timeout=45):
+    """Fetch bytes.
+
+    Through requests, not urllib: export.arxiv.org answers urllib with HTTP
+    406 regardless of headers, while requests gets 200 for the same URL.
+    """
+    resp = requests.get(url, headers=UA, timeout=timeout)
+    resp.raise_for_status()
+    return resp.content
+
 def entries(q, n):
     url = ("http://export.arxiv.org/api/query?search_query=%s"
            "&start=0&max_results=%d&sortBy=relevance"
            % (urllib.parse.quote(q), n))
-    req = urllib.request.Request(url, headers=UA)
-    root = ET.fromstring(urllib.request.urlopen(req, timeout=45).read())
+    root = ET.fromstring(_get(url, 45))
     for e in root.findall(ATOM + "entry"):
         def t(tag):
             node = e.find(ATOM + tag)
