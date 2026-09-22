@@ -234,6 +234,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="draft and gate, but publish nothing")
     ap.add_argument("--check", action="store_true",
                     help="report what would happen; run nothing")
+    ap.add_argument("--ignore-completed", action="store_true",
+                    help="publish even though today already has a paper. A "
+                         "deliberate, human-only override of the completion "
+                         "guard; the citation gate and the duplicate check "
+                         "are NOT affected and still have to pass.")
     ap.add_argument("--quiet", action="store_true",
                     help="keep the session transcript out of stdout; it still "
                          "goes to runner.log. Use this when stdout is a public "
@@ -289,7 +294,18 @@ def main(argv: list[str] | None = None) -> int:
 
     # A finished day is a no-op. Cheapest question to answer, so answer it
     # before starting any work at all.
-    if already and not args.stage_only:
+    #
+    # --ignore-completed is the one way past this, and it is deliberately
+    # narrow: it can only arrive from a human running workflow_dispatch, never
+    # from the schedule, and it overrides ONLY the "one paper a day" rule. The
+    # citation gate and the duplicate-title check are untouched and still have
+    # to pass before anything is minted.
+    if already and args.ignore_completed and not args.stage_only:
+        note("Today already published %s." % already)
+        note("        --ignore-completed was passed, so continuing anyway and")
+        note("        publishing a SECOND paper for today. The citation gate and")
+        note("        duplicate check still apply.")
+    elif already and not args.stage_only:
         note("Today's paper is already published: %s" % already)
         note("        https://doi.org/%s" % already)
         note("        Nothing to do - a second launch on a finished day is a no-op.")
