@@ -454,8 +454,12 @@ def main(argv: list[str] | None = None) -> int:
         print("  %-18s %3d fetched, %3d off-topic, %3d contest something"
               % (area, len(papers), off, kept))
 
-    found.sort(key=lambda ap_: (-ap_[1].score, ap_[1].published), reverse=False)
-    found.sort(key=lambda ap_: ap_[1].score, reverse=True)
+    # Strongest signal first, newest first within a tie. One sort, not two:
+    # the previous pair left ties ordered OLDEST first, because Python's sort
+    # is stable and the second pass preserved the first pass's ascending date.
+    # That decides who makes the cut once --limit is small, and "very new" is
+    # half the point of scouting at all.
+    found.sort(key=lambda ap_: (ap_[1].score, ap_[1].published), reverse=True)
 
     print("")
     print("%d papers fetched, %d candidates at score >= %d."

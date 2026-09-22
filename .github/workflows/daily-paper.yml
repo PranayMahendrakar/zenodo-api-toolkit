@@ -183,13 +183,18 @@ jobs:
       # which at two papers a day is about a month; this tops it up from live
       # arXiv metadata so the runway does not end.
       #
+      # 12 a day, not 20: of the first 20 appended, about 14 were genuinely
+      # usable and the rest were surveys or mis-tagged. Taking only the top
+      # 12 by signal strength drops that weak tail, and 12 a day against two
+      # consumed is still six times more than the pipeline spends.
+      #
       # if: always() because a failed paper is exactly when the queue most
       # needs to be in good shape for the retry. Costs 0.2s and no network
       # once the pool is full, so the other six attempts a day are free.
       - name: Top up the topic queue
         if: always()
         working-directory: papers
-        run: python topic_scout.py --limit 20 --append --max-pool 200 || true
+        run: python topic_scout.py --limit 12 --append --max-pool 200 || true
 
       # The run mutates content - the draft, the queue, the logs. Push it back
       # or the next run starts from stale state and re-picks the same topic.
