@@ -127,7 +127,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pymupdf markdown requests
+          # matplotlib: step 5 requires a figure in every paper, and a
+          # missing plotting library fails the draft, not the install.
+          pip install pymupdf markdown requests matplotlib
 
       - name: Install Claude Code
         run: |

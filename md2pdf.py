@@ -331,12 +331,23 @@ def build_html(src):
         CSS, head, main_html, refs_html, build_footer(fm, author))
 
 
-def render(html_str, out_path):
+def render(html_str, out_path, asset_dir=None):
     page_w, page_h = fitz.paper_size("a4")
     margin = 56
     where = fitz.Rect(margin, margin, page_w - margin, page_h - margin - 18)
 
-    story = fitz.Story(html=html_str, user_css=None)
+    # Without an Archive, Story cannot resolve a relative <img src> and drops
+    # the tag silently - a figure cited in the text and missing from the PDF.
+    # Rooting one at the paper's own directory makes ![caption](fig.png) work.
+    archive = None
+    if asset_dir and os.path.isdir(asset_dir):
+        try:
+            archive = fitz.Archive(asset_dir)
+        except Exception as exc:
+            sys.stderr.write("WARNING: figures not embedded (%s)\n" % exc)
+    story = (fitz.Story(html=html_str, user_css=None, archive=archive)
+             if archive is not None
+             else fitz.Story(html=html_str, user_css=None))
     writer = fitz.DocumentWriter(out_path)
     n = 0
     more = 1
@@ -365,7 +376,8 @@ def main():
         sys.exit(__doc__)
     src_path, out_path = sys.argv[1], sys.argv[2]
     src = open(src_path, encoding="utf-8").read()
-    pages = render(build_html(src), out_path)
+    pages = render(build_html(src), out_path,
+                   asset_dir=os.path.dirname(os.path.abspath(src_path)))
     size = os.path.getsize(out_path)
     print("wrote %s  (%d pages, %.2f MB)" % (out_path, pages, size / 1e6))
 

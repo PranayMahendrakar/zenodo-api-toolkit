@@ -73,8 +73,15 @@ Do the work yourself, now, in this session. Do NOT delegate it to a background
 agent or a background task, and do NOT end your turn early to report that
 something is still running: this is a one-shot non-interactive invocation, so
 the process exits when your turn ends and anything left in the background is
-killed unfinished. There is nobody to report back to. Work through the steps in
-the foreground and finish only once the paper is actually on disk.
+killed unfinished. There is nobody to report back to.
+
+Do not rush in the other direction either. You have 150 minutes and a paper
+takes 30 to 90 of them. Step 4's literature sweep is most of that and is what
+the paper is made of: the two papers written before this instruction existed
+came in at 6,200 words on 13 references in under fifteen minutes, against
+12,400 words on 45 references before. See the DEPTH and APPARATUS rules in
+step 5 - they are floors, not targets, and a thin paper should be staged with
+a reason rather than published.
 """
 
 PROMPT_STAGE = """\
@@ -88,8 +95,15 @@ Do the work yourself, now, in this session. Do NOT delegate it to a background
 agent or a background task, and do NOT end your turn early to report that
 something is still running: this is a one-shot non-interactive invocation, so
 the process exits when your turn ends and anything left in the background is
-killed unfinished. There is nobody to report back to. Work through the steps in
-the foreground and finish only once the paper is actually on disk.
+killed unfinished. There is nobody to report back to.
+
+Do not rush in the other direction either. You have 150 minutes and a paper
+takes 30 to 90 of them. Step 4's literature sweep is most of that and is what
+the paper is made of: the two papers written before this instruction existed
+came in at 6,200 words on 13 references in under fifteen minutes, against
+12,400 words on 45 references before. See the DEPTH and APPARATUS rules in
+step 5 - they are floors, not targets, and a thin paper should be staged with
+a reason rather than published.
 """
 
 
