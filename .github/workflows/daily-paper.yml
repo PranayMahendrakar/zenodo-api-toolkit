@@ -227,5 +227,33 @@ jobs:
             echo "nothing to commit"
           else
             git commit -m "daily paper: $(date -u +%Y-%m-%d)"
-            git push
+            # An hour separates the clone from this push, so a commit landing
+            # meanwhile makes it non-fast-forward - and this runs AFTER the
+            # DOI is minted, so failing here means a published paper with no
+            # record of it in the repo. On 2026-09-24 that lost a draft and
+            # its figure, and left the guard counting one paper instead of
+            # two. The commit only touches files this run produced, so
+            # replaying it on top of whatever arrived is the right move.
+            pushed=""
+            for attempt in 1 2 3 4 5; do
+              if git push; then
+                echo "pushed on attempt $attempt"
+                pushed=yes
+                break
+              fi
+              echo "push rejected; rebasing onto origin/main (attempt $attempt)"
+              if ! git pull --rebase origin main; then
+                echo "REBASE FAILED - the paper may already be published."
+                echo "Check Zenodo before re-running anything."
+                git rebase --abort || true
+                break
+              fi
+              sleep 5
+            done
+            if [ -z "$pushed" ]; then
+              echo "::error::could not push the run's results after 5 attempts."
+              echo "If a DOI was minted, the repo is now missing its draft -"
+              echo "recover it from the published PDF before the next slot."
+              exit 1
+            fi
           fi
