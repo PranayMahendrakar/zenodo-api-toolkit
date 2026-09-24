@@ -242,7 +242,11 @@ jobs:
                 break
               fi
               echo "push rejected; rebasing onto origin/main (attempt $attempt)"
-              if ! git pull --rebase origin main; then
+              # autoStash: the toolkit copies are untracked now, so the tree
+              # should be clean - but a rebase that refuses because of some
+              # stray file would silently make this whole loop one-shot, which
+              # is exactly the failure this loop was added to fix.
+              if ! git -c rebase.autoStash=true pull --rebase origin main; then
                 echo "REBASE FAILED - the paper may already be published."
                 echo "Check Zenodo before re-running anything."
                 git rebase --abort || true
