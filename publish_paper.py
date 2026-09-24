@@ -6,6 +6,11 @@ before anything irreversible happens. Nothing about the record is decided here i
 code. Renders the PDF if it is missing or stale, verifies every citation with
 cite_check.py, then creates a Zenodo deposition and uploads the PDF.
 
+--gate-only runs every one of those gates and stops at the last instruction
+before the deposition is created, stamping `gated:` into the front matter.
+That is what lets a paper sit in the buffer as a proven-publishable fact
+rather than as something a drafting session said was fine.
+
 It STOPS at the draft and prints the URL. It never publishes unless you both pass
 --publish and type PUBLISH at the prompt:
 
@@ -37,6 +42,10 @@ Front matter keys read (CLI flag in brackets overrides the file):
 
 Other flags:
 
+    --gate-only         run every gate - render, citations, placeholders,
+                        figure, duplicate title - and stop at the last step
+                        before the deposition. Stamps `gated:`. Needs a
+                        token (the duplicate check queries Zenodo).
     --dry-run           print the record block and stop. No token needed, no
                         render, no citation check, no network call of any kind.
     --skip-cite-check   upload even if citations fail (not recommended)
@@ -265,7 +274,7 @@ def main():
                    "--journal-pages", "--copyright", "--version",
                    "--upload-type", "--access-right", "--embargo-date"}
     bool_flags = {"--skip-cite-check", "--publish", "--dry-run",
-                  "--yes", "--force-duplicate"}
+                  "--yes", "--force-duplicate", "--gate-only"}
     i = 1
     while i < len(args):
         if args[i] in value_flags:
@@ -280,6 +289,10 @@ def main():
                 "otherwise be dropped silently.\n\n%s" % (args[i], __doc__))
 
     dry_run = "--dry-run" in args
+    gate_only = "--gate-only" in args
+    if gate_only and ("--publish" in args or dry_run):
+        die("--gate-only runs every gate and stops before the deposition.\n"
+            "  It is contradictory with --publish and redundant with --dry-run.")
     if dry_run and "--publish" in args:
         die("--dry-run and --publish are contradictory; pick one")
 
@@ -369,6 +382,7 @@ def main():
     orcid = opt("--orcid") or fm_meta(fm, "orcid")
     affiliation = opt("--affiliation") or fm_meta(fm, "affiliation")
     pub_date = scalar(fm, "date")
+    prior_gated = scalar(fm, "gated")
     prior_doi = scalar(fm, "doi")
     prior_url = scalar(fm, "record_url")
 
@@ -385,6 +399,23 @@ def main():
             "every one of them would land on the permanent record:\n\n%s\n\n"
             "Edit them in %s before publishing."
             % ("\n".join("  %-18s: %s" % (n, v) for n, v in stale), src))
+
+    # ---- the publication date is decided HERE, at mint time ----------
+    # A buffered paper is drafted days before it is published, so a date
+    # carried from drafting would be a false publication_date on a permanent
+    # record. ZENODO_RUN_DATE is the runner's own `today`, computed once under
+    # the runner's timezone - not the wall clock now, because the 23:00 slot
+    # can mint at 00:20 and stamping tomorrow makes the guard read today as
+    # zero, so the next morning skips the whole day.
+    #
+    # Re-stamped every attempt, never written-once: a stale date from a failed
+    # attempt must never survive into the record.
+    run_date = os.environ.get("ZENODO_RUN_DATE", "").strip() or time.strftime("%Y-%m-%d")
+    if not dry_run and not gate_only and pub_date != run_date:
+        if not write_front_matter(src, [("date", run_date)]):
+            die("could not stamp the publication date into %s" % src)
+        print("  date   : stamped %s (was %s)" % (run_date, pub_date or "unset"))
+        pub_date = run_date
 
     pdf = opt("--pdf") or os.path.splitext(src)[0] + ".pdf"
     if not dry_run:
@@ -640,12 +671,41 @@ def main():
             print("    ... --force-duplicate")
             sys.exit(3)
 
+    if gate_only:
+        # Everything that guards a DOI has now run against this exact file and
+        # passed: render, cite_check, placeholders, figure, licence, and the
+        # duplicate-title lookup above. The next line is the first that cannot
+        # be undone, so this is where "provably publishable" is established.
+        stamp = os.environ.get("ZENODO_RUN_DATE", "").strip() or time.strftime("%Y-%m-%d")
+        if not write_front_matter(src, [("gated", stamp)]):
+            die("every gate passed but `gated:` could not be written to %s.\n"
+                "  Refusing to report success: an unrecorded pass means the\n"
+                "  buffer cannot tell this paper from an ungated one." % src)
+        print("")
+        print("GATE-ONLY. Every gate passed and nothing was published.")
+        print("  stamped : gated: %s" % stamp)
+        print("  %s is now publishable without re-running the gates." % src)
+        return
+
     r = s.post("%s/api/deposit/depositions" % BASE, json={})
     if not r.ok:
         die("could not create deposition: %s %s" % (r.status_code, r.text[:300]))
     dep = r.json()
     dep_id, bucket = dep["id"], dep["links"]["bucket"]
     print("\ndeposition %s created" % dep_id)
+
+    # From here on the attempt has entered the region that cannot be undone.
+    # Record that in the paper BEFORE the upload, the metadata and the publish
+    # call, so that if any of them dies the file itself says "an attempt got
+    # this far, outcome unknown" - a fact the runner can reconcile against
+    # Zenodo, rather than an inference from a date. Without this a crash
+    # between here and the DOI write-back leaves a deposition nobody knows to
+    # look for, and the next run cheerfully mints a second one.
+    if not write_front_matter(src, [("deposition", str(dep_id))]):
+        die("deposition %s was created but could not be recorded in %s.\n"
+            "  Refusing to continue: an unrecorded deposition is how a paper\n"
+            "  gets published twice. Add `deposition: %s` by hand, then re-run."
+            % (dep_id, src, dep_id))
 
     with open(pdf, "rb") as fh:
         r = s.put("%s/%s" % (bucket, os.path.basename(pdf)), data=fh)

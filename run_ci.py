@@ -153,12 +153,66 @@ def drafts_md() -> list[str]:
 
 
 def front_matter(path: str) -> str:
-    """First 60 lines - enough for the front matter, cheap on a 10k-word file."""
+    """The YAML front matter, ending at its closing `---`.
+
+    Bounded by the delimiter rather than by a line count. A fixed 60-line
+    window was safe only while the front matter was short: reference lines in
+    the body begin `doi:10.48550/arXiv....` at column zero, so a window that
+    overshoots the closing `---` can read a citation as the paper's own DOI.
+    Adding written:/gated:/deposition: pushes the block longer, which is
+    exactly when that would have started happening.
+    """
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
-            return "".join(next(fh, "") for _ in range(60))
+            first = fh.readline()
+            if first.strip() != "---":
+                return ""
+            out = [first]
+            for line in fh:
+                out.append(line)
+                if line.strip() == "---":
+                    break
+            return "".join(out)
     except OSError:
         return ""
+
+
+def field(path: str, name: str) -> str | None:
+    """One front-matter scalar, or None. Blank counts as absent."""
+    m = re.search(r"(?m)^%s:\s*(\S.*?)\s*$" % re.escape(name), front_matter(path))
+    return m.group(1) if m else None
+
+
+def ready_papers() -> list[str]:
+    """Buffered papers proven publishable, oldest first.
+
+    `gated:` is the whole point: it is written only after the offline gates
+    actually ran and passed, so selection never rests on a session's report
+    about its own work. A paper on hold, already published, or mid-attempt is
+    not ready.
+    """
+    out = []
+    for f in drafts_md():
+        if field(f, "doi") or field(f, "hold") or field(f, "deposition"):
+            continue
+        if field(f, "gated"):
+            out.append(f)
+    out.sort(key=lambda p: (field(p, "written") or "", os.path.basename(p)))
+    return out
+
+
+def in_flight() -> str | None:
+    """A paper whose publish attempt reached Zenodo with the outcome unknown.
+
+    Any date, not today's. `deposition:` is written before the irreversible
+    step and cleared only by success, so this is a fact rather than an
+    inference from a date. While one exists nothing else may be published:
+    minting a second DOI for the same paper cannot be undone.
+    """
+    for f in drafts_md():
+        if field(f, "deposition") and not field(f, "doi"):
+            return f
+    return None
 
 
 def published_dois() -> set[str]:
