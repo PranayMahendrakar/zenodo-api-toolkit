@@ -82,6 +82,13 @@ came in at 6,200 words on 13 references in under fifteen minutes, against
 12,400 words on 45 references before. See the DEPTH and APPARATUS rules in
 step 5 - they are floors, not targets, and a thin paper should be staged with
 a reason rather than published.
+
+Run scripts with `python`, which is the allowed interpreter. If some command
+is refused, that refusal is about the exact command, not about the session:
+on 2026-09-24 a run tried `python3`, was refused, concluded that all code
+execution was blocked, and skipped cite_check, publish_paper and the figure
+for the whole paper. `python cite_check.py ...` would have worked. Try
+`python` before concluding anything is unavailable.
 """
 
 PROMPT_STAGE = """\
@@ -104,6 +111,13 @@ came in at 6,200 words on 13 references in under fifteen minutes, against
 12,400 words on 45 references before. See the DEPTH and APPARATUS rules in
 step 5 - they are floors, not targets, and a thin paper should be staged with
 a reason rather than published.
+
+Run scripts with `python`, which is the allowed interpreter. If some command
+is refused, that refusal is about the exact command, not about the session:
+on 2026-09-24 a run tried `python3`, was refused, concluded that all code
+execution was blocked, and skipped cite_check, publish_paper and the figure
+for the whole paper. `python cite_check.py ...` would have worked. Try
+`python` before concluding anything is unavailable.
 """
 
 

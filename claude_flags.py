@@ -18,7 +18,12 @@ ALLOWED_TOOLS = [
     "Write", "Edit", "MultiEdit", "NotebookEdit",
     "WebFetch", "WebSearch",
     "TodoWrite", "Task",
-    "Bash(python:*)", "Bash(py:*)",
+    # python3 as well as python. On Linux the model reaches for python3 by
+    # instinct; without it the call is refused, and on 2026-09-24 the run read
+    # one refusal as "this session blocks all code execution" and gave up on
+    # cite_check, publish_paper and matplotlib for the whole paper. The
+    # interpreter it happened to name should not decide whether the gates run.
+    "Bash(python:*)", "Bash(py:*)", "Bash(python3:*)",
 ]
 
 PERMISSION_MODE = "acceptEdits"

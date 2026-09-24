@@ -298,6 +298,29 @@ def main():
     if not (title and author and abstract):
         die("front matter is missing title, author, or the paper has no ## Abstract")
 
+    # ---- the figure gate --------------------------------------------------
+    # Required by DAILY_RUN.md step 5 and unenforced until now. The 09-24
+    # paper published with no figure at all because matplotlib was unreachable
+    # and nothing downstream asked. A DOI cannot be withdrawn, so the check
+    # belongs here, beside the citation gate, not in a style note.
+    figures = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", body)
+    if not figures:
+        die("no figure in the paper.\n"
+            "  DAILY_RUN.md step 5 requires at least one, written as\n"
+            "      ![Caption naming the source](name.png)\n"
+            "  and drawn from values a cited paper published. If a figure\n"
+            "  genuinely cannot be drawn for this topic, stage the paper and\n"
+            "  say why in the log rather than publishing without one.")
+
+    missing = [f for f in figures
+               if not os.path.exists(os.path.join(os.path.dirname(src), f))]
+    if missing:
+        die("the paper references %d figure(s) that are not on disk:\n"
+            "    %s\n"
+            "  md2pdf drops an image it cannot resolve, silently, so the PDF\n"
+            "  would discuss a plot the reader never sees."
+            % (len(missing), "\n    ".join(missing)))
+
     # ---- every remaining permanent-record field: front matter, then CLI ----
     # Nothing below is decided by this program. It is declared, defaulted, and
     # printed back to you before the DOI is minted.
