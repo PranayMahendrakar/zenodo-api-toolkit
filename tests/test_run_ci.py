@@ -192,6 +192,75 @@ check("every DOI on disk is collected",
 
 run_ci.DRAFTS = real_drafts
 
+
+# -- the buffer -----------------------------------------------------------
+# `date:` used to do three jobs: Zenodo's publication_date, the completion
+# guard's key, and the in-flight marker. Under a buffer a paper is written
+# days before it is published, so the three diverge. Each now has its own
+# field, and each of these tests fails if its guard is removed.
+import textwrap
+
+buf = tempfile.mkdtemp(prefix="run_ci_buffer_")
+run_ci.DRAFTS = buf
+
+
+def paper(name, **fields):
+    lines = ["---", 'title: "T"']
+    for k, v in fields.items():
+        if v is not None:
+            lines.append("%s: %s" % (k, v))
+    lines += ["---", "", "## References", "",
+              # A real reference line, at column zero. front_matter() must stop
+              # at the closing --- or it reads this as the paper's own DOI.
+              "Doe, J. (2026). Thing. arXiv:2601.00001. doi:10.48550/arXiv.2601.00001"]
+    with open(os.path.join(buf, name), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines))
+    return os.path.join(buf, name)
+
+
+p_ready_old = paper("ready-old.md", written="2026-09-20", gated="2026-09-20")
+p_ready_new = paper("ready-new.md", written="2026-09-23", gated="2026-09-23")
+p_ungated = paper("ungated.md", written="2026-09-21")
+p_held = paper("held.md", written="2026-09-19", gated="2026-09-19", hold="bad figure")
+p_done = paper("done.md", written="2026-09-18", gated="2026-09-18",
+               date="2026-09-22", doi="10.5281/zenodo.1")
+p_flight = paper("inflight.md", written="2026-09-17", gated="2026-09-17",
+                 deposition="99887766")
+
+check("a reference line is not read as the paper's own doi",
+      run_ci.field(p_ready_old, "doi"), None)
+check("front matter fields are read",
+      run_ci.field(p_ready_old, "gated"), "2026-09-20")
+
+ready = [os.path.basename(x) for x in run_ci.ready_papers()]
+check("only gated, unpublished, unheld, not-in-flight papers are ready",
+      ready, ["ready-old.md", "ready-new.md"])
+check("ready papers come out oldest-written first (FIFO)",
+      ready[0], "ready-old.md")
+
+check("an ungated draft is never selected", "ungated.md" in ready, False)
+check("a held paper is never selected", "held.md" in ready, False)
+check("a published paper is never re-selected", "done.md" in ready, False)
+check("a paper mid-attempt is never selected", "inflight.md" in ready, False)
+
+check("an unresolved attempt is detected",
+      os.path.basename(run_ci.in_flight() or ""), "inflight.md")
+
+# The in-flight marker must be a FACT, not inferred from a date - that
+# inference is what stranded drafts before.
+os.remove(p_flight)
+check("no unresolved attempt once it is gone", run_ci.in_flight(), None)
+
+# The completion guard counts by PUBLICATION date, which publish_paper stamps
+# at mint time - not by when the paper was written.
+check("the guard counts the day a paper was published",
+      run_ci.todays_published_count("2026-09-22"), 1)
+check("the guard does not count the day it was written",
+      run_ci.todays_published_count("2026-09-18"), 0)
+
+run_ci.DRAFTS = real_drafts
+
+
 print("")
 print("%d passed%s" % (PASS, ", %d FAILED" % FAIL if FAIL else ""))
 sys.exit(1 if FAIL else 0)

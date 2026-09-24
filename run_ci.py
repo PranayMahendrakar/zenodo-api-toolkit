@@ -224,6 +224,9 @@ def published_dois() -> set[str]:
     return out
 
 
+BUFFER_TARGET = 4         # proven-publishable papers to keep banked
+MAX_PER_RUN = 3           # papers one writer run may draft
+
 DAILY_TARGET = 2          # papers per day
 EVENING_HOUR = 19         # IST; the hour the second slot opens
 
@@ -316,9 +319,25 @@ def publish_existing(draft: str) -> int:
     note("        %s" % os.path.basename(draft))
     note("        finishing it rather than writing a second paper")
     rel = os.path.join("drafts", os.path.basename(draft))
+    env = dict(os.environ, ZENODO_RUN_DATE=_dt.date.today().isoformat())
     proc = subprocess.run([sys.executable, "publish_paper.py", rel, "--publish", "--yes"],
-                          cwd=PROJ)
+                          cwd=PROJ, env=env)
     return proc.returncode
+
+
+def gate(draft: str, run_date: str) -> bool:
+    """Run every DOI-guarding gate against a draft; stamp `gated:` if they pass.
+
+    Delegated to publish_paper.py --gate-only rather than reimplemented, so
+    the buffer is gated by exactly the code that publishes - not by a second,
+    drifting copy of the same rules. Returns False loudly; a paper that fails
+    here simply stays unready and the writer moves to the next one.
+    """
+    env = dict(os.environ, ZENODO_RUN_DATE=run_date)
+    rel = os.path.join("drafts", os.path.basename(draft))
+    proc = subprocess.run([sys.executable, "publish_paper.py", rel, "--gate-only"],
+                          cwd=PROJ, env=env)
+    return proc.returncode == 0
 
 
 def classify(output: str) -> str:
@@ -355,6 +374,92 @@ def find_cli() -> str | None:
     return None
 
 
+def write_one(cli: str, prompt: str, quiet: bool = False):
+    """Run ONE drafting session, with the retry rules, and report what it left.
+
+    Extracted so the buffer writer can run it repeatedly without a second copy
+    of the judging logic. Every rule here was earned the hard way and there
+    must only ever be one of it:
+
+      * an auth failure is terminal and never retried;
+      * an attempt is judged by what it LEFT BEHIND, not by how its transcript
+        read - a session can end politely having done nothing;
+      * a retry never runs on top of a draft or a DOI, because that starts a
+        second paper rather than finishing the first.
+
+    Returns (failed, minted, drafted).
+    """
+    flags = claude_flags.flags()
+    dois_before = published_dois()
+    drafts_before = len(drafts_md())
+
+
+
+    failed = False
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        if attempt > 1:
+            note("retrying: attempt %d of %d" % (attempt, MAX_ATTEMPTS))
+
+        # Stream as it arrives; a run this long should not be a black box.
+        chunks: list[str] = []
+        proc = subprocess.Popen([cli, "-p", prompt] + flags, cwd=PROJ,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, encoding="utf-8", errors="replace",
+                                bufsize=1)
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            # On a public repo the workflow log is world-readable, and this
+            # stream is the paper itself. Capture it either way - runner.log
+            # is committed to the private repo - but only echo it when stdout
+            # is somewhere the draft is allowed to be.
+            if not quiet:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+            chunks.append(line)
+        proc.wait()
+        out = "".join(chunks)
+
+        with open(LOG, "a", encoding="utf-8") as fh:
+            fh.write(out)
+
+        verdict = classify(out)
+        if verdict == "terminal":
+            note("FAILED: authentication problem - not retrying, this needs you.")
+            note("        Re-run `claude setup-token` and update the secret.")
+            failed = True
+            break
+
+        # What the attempt LEFT BEHIND decides, not how its transcript read.
+        # "clean" only means the session ended with no error string in it, and
+        # a session can end perfectly politely having done nothing: on 22 Sep
+        # 2026 one handed the job to a background task, announced it would
+        # report back, and exited - killing the task. That transcript is
+        # "clean", and this loop used to break on it and call the whole run a
+        # failure with most of the budget unspent.
+        minted = published_dois() - dois_before
+        drafted = len(drafts_md()) > drafts_before
+
+        if not should_retry(verdict, bool(minted), drafted):
+            # Real work exists. Never relaunch on top of it - a second run
+            # would start a second paper rather than finish this one.
+            if verdict != "clean":
+                note("transient API problem, but the attempt left work behind")
+                note("        (%s), so not retrying."
+                     % ("a DOI was minted" if minted else "a draft was written"))
+            break
+
+        note("transient API problem" if verdict != "clean" else
+             "the session ended cleanly but produced nothing - it did not work")
+        if attempt == MAX_ATTEMPTS:
+            note("FAILED: %d attempts produced no paper." % MAX_ATTEMPTS)
+            failed = True
+            break
+        note("        nothing was produced, so waiting %ds and trying again" % RETRY_WAIT)
+        time.sleep(RETRY_WAIT)
+
+    return failed, published_dois() - dois_before, len(drafts_md()) > drafts_before
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -367,6 +472,11 @@ def main(argv: list[str] | None = None) -> int:
                          "deliberate, human-only override of the completion "
                          "guard; the citation gate and the duplicate check "
                          "are NOT affected and still have to pass.")
+    ap.add_argument("--fill-buffer", type=int, nargs="?", const=BUFFER_TARGET,
+                    default=None, metavar="N",
+                    help="write papers until N proven-publishable ones are "
+                         "banked (default %d), then stop. Publishes nothing."
+                         % BUFFER_TARGET)
     ap.add_argument("--quiet", action="store_true",
                     help="keep the session transcript out of stdout; it still "
                          "goes to runner.log. Use this when stdout is a public "
@@ -397,6 +507,10 @@ def main(argv: list[str] | None = None) -> int:
              % (len(drafts_md()), len(published_dois())))
         note("check: today published  = %d of %d wanted by now%s"
              % (done_today, target, (" (latest %s)" % already) if already else ""))
+        note("check: buffer           = %d ready of %d wanted%s"
+             % (len(ready_papers()), BUFFER_TARGET,
+                ("  [IN FLIGHT: %s]" % os.path.basename(in_flight()))
+                if in_flight() else ""))
         note("check: today pending    = %s"
              % (os.path.basename(todays_pending_draft() or "") or "no"))
         note("check: mode             = %s" % ("stage-only" if args.stage_only else "publish"))
@@ -465,9 +579,89 @@ def main(argv: list[str] | None = None) -> int:
         note("ABORT: claude CLI not found on PATH.")
         return 1
 
-    # Retry until published, cheaply. A day that drafted but did not publish
-    # needs its last step run, not another paper. Skipped in stage-only mode,
-    # where not publishing is the whole point.
+    run_date = _dt.date.today().isoformat()
+
+    # ---- nothing proceeds while an attempt is unresolved -----------------
+    # `deposition:` without `doi:` means a previous attempt reached the part
+    # of Zenodo that cannot be undone and we do not know how it ended. Writing
+    # is fine; publishing anything is not, because the unresolved paper may
+    # already be live and a second attempt would mint a second permanent
+    # record for the same work.
+    stuck = in_flight()
+    if stuck and not args.stage_only and args.fill_buffer is None:
+        dep = field(stuck, "deposition")
+        note("BLOCKED: %s carries deposition %s and no doi."
+             % (os.path.basename(stuck), dep))
+        note("        An attempt reached Zenodo and its outcome is unknown, so")
+        note("        publishing anything now risks a second permanent record.")
+        note("        Check it, then either record the doi: in the front matter")
+        note("        or remove the draft with: python delete_draft.py %s" % dep)
+        note("----- run finished -----")
+        return 1
+
+    # ---- writer mode: bank papers, publish nothing ------------------------
+    if args.fill_buffer is not None:
+        want = args.fill_buffer
+        wrote = gated = 0
+        # Bounded per run so the job cannot be killed mid-paper. A paper
+        # is 30-90 minutes; three fits inside the writer job's timeout
+        # with room, and the buffer fills over days rather than in one
+        # very long run that risks losing the last paper to the cap.
+        while wrote < MAX_PER_RUN:
+            have = len(ready_papers())
+            if have >= want:
+                note("buffer holds %d of %d wanted - nothing to write." % (have, want))
+                break
+            note("buffer holds %d of %d; writing one more." % (have, want))
+            before = set(drafts_md())
+            _f, _m, _d = write_one(cli, PROMPT_STAGE, args.quiet)
+            fresh = [d for d in drafts_md() if d not in before]
+            if not fresh:
+                note("FAILED: the session produced no draft; stopping rather than")
+                note("        looping. The buffer is unchanged at %d." % have)
+                break
+            wrote += 1
+            draft = fresh[0]
+            if gate(draft, run_date):
+                gated += 1
+                note("banked %s" % os.path.basename(draft))
+            else:
+                note("%s failed its gates and stays unready - moving on."
+                     % os.path.basename(draft))
+        if wrote >= MAX_PER_RUN and len(ready_papers()) < want:
+            note("stopped at the %d-paper cap for one run; the next"
+                 " writer slot continues." % MAX_PER_RUN)
+        note("writer finished: %d written, %d banked, buffer now %d."
+             % (wrote, gated, len(ready_papers())))
+        note("----- run finished -----")
+        return 0 if gated or len(ready_papers()) >= want else 1
+
+    # ---- publish from the buffer -----------------------------------------
+    # The point of the buffer: the slow, failure-prone half (writing) is no
+    # longer inside the irreversible half (publishing).
+    if not args.stage_only:
+        ready = ready_papers()
+        if ready:
+            paper = ready[0]
+            note("publishing from the buffer: %s (written %s, gated %s)"
+                 % (os.path.basename(paper), field(paper, "written") or "?",
+                    field(paper, "gated") or "?"))
+            rc = publish_existing(paper)
+            minted = draft_doi(paper)
+            if resume_succeeded(rc, minted):
+                note("OK: published %s - https://doi.org/%s" % (minted, minted))
+                note("        buffer now holds %d." % len(ready_papers()))
+                note("----- run finished -----")
+                return 0
+            note("FAILED: could not publish %s (exit %d)."
+                 % (os.path.basename(paper), rc))
+            note("        The gates above say why. Nothing was written twice.")
+            note("----- run finished -----")
+            return 1
+        note("buffer is empty - writing this one inline, as before.")
+
+    # Transition path, and the resume path it replaces: a draft written today
+    # that never published. Kept so nothing already written is ever wasted.
     pending = todays_pending_draft()
     if pending and not args.stage_only:
         rc = publish_existing(pending)
@@ -482,72 +676,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     prompt = PROMPT_STAGE if args.stage_only else PROMPT_PUBLISH
-    flags = claude_flags.flags()
-
     dois_before = published_dois()
     drafts_before = len(drafts_md())
-
-    failed = False
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        if attempt > 1:
-            note("retrying: attempt %d of %d" % (attempt, MAX_ATTEMPTS))
-
-        # Stream as it arrives; a run this long should not be a black box.
-        chunks: list[str] = []
-        proc = subprocess.Popen([cli, "-p", prompt] + flags, cwd=PROJ,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, encoding="utf-8", errors="replace",
-                                bufsize=1)
-        assert proc.stdout is not None
-        for line in proc.stdout:
-            # On a public repo the workflow log is world-readable, and this
-            # stream is the paper itself. Capture it either way - runner.log
-            # is committed to the private repo - but only echo it when stdout
-            # is somewhere the draft is allowed to be.
-            if not args.quiet:
-                sys.stdout.write(line)
-                sys.stdout.flush()
-            chunks.append(line)
-        proc.wait()
-        out = "".join(chunks)
-
-        with open(LOG, "a", encoding="utf-8") as fh:
-            fh.write(out)
-
-        verdict = classify(out)
-        if verdict == "terminal":
-            note("FAILED: authentication problem - not retrying, this needs you.")
-            note("        Re-run `claude setup-token` and update the secret.")
-            failed = True
-            break
-
-        # What the attempt LEFT BEHIND decides, not how its transcript read.
-        # "clean" only means the session ended with no error string in it, and
-        # a session can end perfectly politely having done nothing: on 22 Sep
-        # 2026 one handed the job to a background task, announced it would
-        # report back, and exited - killing the task. That transcript is
-        # "clean", and this loop used to break on it and call the whole run a
-        # failure with most of the budget unspent.
-        minted = published_dois() - dois_before
-        drafted = len(drafts_md()) > drafts_before
-
-        if not should_retry(verdict, bool(minted), drafted):
-            # Real work exists. Never relaunch on top of it - a second run
-            # would start a second paper rather than finish this one.
-            if verdict != "clean":
-                note("transient API problem, but the attempt left work behind")
-                note("        (%s), so not retrying."
-                     % ("a DOI was minted" if minted else "a draft was written"))
-            break
-
-        note("transient API problem" if verdict != "clean" else
-             "the session ended cleanly but produced nothing - it did not work")
-        if attempt == MAX_ATTEMPTS:
-            note("FAILED: %d attempts produced no paper." % MAX_ATTEMPTS)
-            failed = True
-            break
-        note("        nothing was produced, so waiting %ds and trying again" % RETRY_WAIT)
-        time.sleep(RETRY_WAIT)
+    failed, _minted, _drafted = write_one(cli, prompt, args.quiet)
 
     if failed:
         note("FAILED: no paper produced.")

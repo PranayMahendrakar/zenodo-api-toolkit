@@ -35,6 +35,11 @@ on:
     - cron: "30 13 * * *"   # 19:00 IST - EVENING paper
     - cron: "30 15 * * *"   # 21:00 IST - evening retry
     - cron: "30 17 * * *"   # 23:00 IST - evening retry
+    # WRITER slots. These bank papers and publish nothing. Deliberately after
+    # the evening publish and before the morning one, so the buffer is topped
+    # up while nothing is waiting on it.
+    - cron: "30 19 * * *"   # 01:00 IST - writer
+    - cron: "30 21 * * *"   # 03:00 IST - writer
   workflow_dispatch:
     inputs:
       stage_only:
@@ -68,7 +73,10 @@ jobs:
     # A paper is 30-90 minutes. Generous rather than tight, so a slow citation
     # gate does not lose the work, but bounded so a hung session cannot burn
     # six hours.
-    timeout-minutes: 150
+    # The writer may draft up to three papers at 30-90 minutes each, so it
+    # needs far more than a publish run does. Publishers finish in minutes and
+    # are unaffected by the larger cap.
+    timeout-minutes: 340
 
     steps:
       - name: Check out the toolkit
@@ -170,6 +178,17 @@ jobs:
         run: |
           # --quiet always: this log is public and the transcript is the paper.
           flags="--quiet"
+
+          # Which cron fired decides the job. github.event.schedule is the
+          # cron string itself, so a writer slot is distinguishable from a
+          # publish slot without a second workflow file and without a second
+          # copy of the setup above.
+          case "${{ github.event.schedule }}" in
+            "30 19 * * *"|"30 21 * * *")
+              echo "writer slot: banking papers, publishing nothing"
+              flags="$flags --fill-buffer"
+              ;;
+          esac
 
           # A scheduled run ALWAYS publishes. Keyed on the event, not on the
           # input being empty: stage_only is declared `default: true`, and if
