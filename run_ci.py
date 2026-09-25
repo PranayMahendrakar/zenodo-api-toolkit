@@ -301,7 +301,13 @@ def published_dois() -> set[str]:
 
 
 BUFFER_TARGET = 4         # default N for a manual --fill-buffer
-MAX_PER_RUN = 3           # papers one writer run may draft
+MAX_PER_RUN = 2           # papers one writer run may draft - see below
+# Two, not three. Nothing a run writes is saved until its final push, and on
+# 2026-09-25 a cancelled run showed that step is SKIPPED on cancellation even
+# with if: always(). Hitting timeout-minutes is a cancellation, so a run that
+# timed out on its third paper would lose the first two with it. Two papers
+# is ~200 minutes against a 340-minute cap, and a day has enough idle slots
+# to reach DAILY_WRITES regardless.
 DAILY_WRITES = 4          # papers to write per day - "3 to 4 daily"
 BUFFER_MAX = 40           # runaway guard: ~20 days of cover at 2/day
 GATE_TRIES = 3            # gate attempts before a written paper is held
