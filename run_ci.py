@@ -121,6 +121,22 @@ for the whole paper. `python cite_check.py ...` would have worked. Try
 """
 
 
+PROMPT_WRITE = """\
+Follow the instructions in DAILY_RUN.md for steps 1 to 8 exactly, then steps 10
+and 11. SKIP STEP 9 ENTIRELY: do not run publish_paper.py in any mode. This paper
+is being written ahead into a buffer; the runner proves it publishable with
+every gate after you finish, and publishes it on a later slot.
+
+Step 11 is not optional here - it is what stops the next session taking the
+same topic. Replace the FIRST line of the topic entry you used with exactly:
+    - [~] BANKED drafts/<slug>.md (<today's date>)
+where <slug>.md is the draft file you wrote, and keep the entry's title as the
+next, indented line. Never mark it PUBLISHED: it is not published.
+
+Never pass --skip-cite-check or --force-duplicate.
+""" + PROMPT_STAGE[PROMPT_STAGE.index("Do the work yourself"):]
+
+
 def note(msg: str) -> None:
     line = "%s  %s" % (_dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), msg)
     with open(LOG, "a", encoding="utf-8") as fh:
@@ -183,6 +199,61 @@ def field(path: str, name: str) -> str | None:
     return m.group(1) if m else None
 
 
+def stamp(path: str, key: str, value: str) -> bool:
+    """Set one front-matter key in place, adding it before the closing ---.
+
+    Never touches the body. Returns False if the file has no front matter,
+    so a caller can refuse to report success on an unrecorded fact.
+    """
+    try:
+        with open(path, encoding="utf-8", newline="") as fh:
+            text = fh.read()
+    except OSError:
+        return False
+    eol = "\r\n" if "\r\n" in text else "\n"
+    lines = text.split(eol)
+    if not lines or lines[0].strip() != "---":
+        return False
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if end is None:
+        return False
+    entry = "%s: %s" % (key, value)
+    for i in range(1, end):
+        if lines[i].startswith(key + ":"):
+            lines[i] = entry
+            break
+    else:
+        lines.insert(end, entry)
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(eol.join(lines))
+    return True
+
+
+def written_today(day: str | None = None) -> int:
+    """Papers drafted on `day`, whatever has happened to them since."""
+    day = day or _dt.date.today().isoformat()
+    return sum(1 for f in drafts_md() if field(f, "written") == day)
+
+
+def ungated_written() -> list[str]:
+    """Papers the pipeline wrote that have not yet passed their gates.
+
+    Only drafts carrying `written:` - legacy drafts predate the buffer and
+    must never be swept up and re-submitted. One of them is already live on
+    Zenodo without a doi: in its front matter.
+    """
+    out = []
+    for f in drafts_md():
+        if not field(f, "written"):
+            continue
+        if field(f, "gated") or field(f, "doi") or field(f, "hold") \
+                or field(f, "deposition"):
+            continue
+        out.append(f)
+    out.sort(key=lambda p: (field(p, "written") or "", os.path.basename(p)))
+    return out
+
+
 def ready_papers() -> list[str]:
     """Buffered papers proven publishable, oldest first.
 
@@ -224,8 +295,13 @@ def published_dois() -> set[str]:
     return out
 
 
-BUFFER_TARGET = 4         # proven-publishable papers to keep banked
+BUFFER_TARGET = 4         # default N for a manual --fill-buffer
 MAX_PER_RUN = 3           # papers one writer run may draft
+DAILY_WRITES = 4          # papers to write per day - "3 to 4 daily"
+BUFFER_MAX = 40           # runaway guard: ~20 days of cover at 2/day
+GATE_TRIES = 3            # gate attempts before a written paper is held
+MORNING_HOUR = 5          # IST; nothing publishes before this
+PAPER_MINUTES = 100       # longest a paper takes, with margin
 
 DAILY_TARGET = 2          # papers per day
 EVENING_HOUR = 19         # IST; the hour the second slot opens
@@ -251,9 +327,28 @@ def target_for(now: _dt.datetime | None = None) -> int:
     08:00 see "one of two done" and immediately write the evening paper,
     collapsing the spacing between two papers that topics.md builds in on
     purpose.
+
+    Zero before the morning slot. Without that, any run after midnight -
+    a 23:00 retry GitHub delayed past 00:00, or a writer cron at 01:00 -
+    saw "0 of 1 today" and published the new day's paper in the small hours:
+    Zenodo shows 01:24 and 02:11 IST for two "morning" papers.
     """
     now = now or _dt.datetime.now()
+    if now.hour < MORNING_HOUR:
+        return 0
     return DAILY_TARGET if now.hour >= EVENING_HOUR else 1
+
+
+def minutes_to_next_publish(now: _dt.datetime | None = None) -> float:
+    """Minutes until the next publish slot opens (05:00 or 19:00 IST)."""
+    now = now or _dt.datetime.now()
+    for h in (MORNING_HOUR, EVENING_HOUR):
+        t = now.replace(hour=h, minute=0, second=0, microsecond=0)
+        if t > now:
+            return (t - now).total_seconds() / 60
+    t = (now + _dt.timedelta(days=1)).replace(hour=MORNING_HOUR, minute=0,
+                                              second=0, microsecond=0)
+    return (t - now).total_seconds() / 60
 
 
 def draft_doi(path: str) -> str | None:
@@ -301,6 +396,11 @@ def todays_pending_draft(today: str | None = None) -> str | None:
     """
     today = today or _dt.date.today().isoformat()
     for f in drafts_md():
+        # A held paper needs a human. A paper the pipeline wrote goes through
+        # regate(), not straight to publish: resuming it here would skip the
+        # buffer's proof step and retry the same failing gates every slot.
+        if field(f, "hold") or (field(f, "written") and not field(f, "gated")):
+            continue
         head = front_matter(f)
         if re.search(r"(?m)^date:\s*" + re.escape(today) + r"\b", head):
             if not re.search(r"(?m)^doi:\s*\S+", head):
@@ -338,6 +438,95 @@ def gate(draft: str, run_date: str) -> bool:
     proc = subprocess.run([sys.executable, "publish_paper.py", rel, "--gate-only"],
                           cwd=PROJ, env=env)
     return proc.returncode == 0
+
+
+TOPICS = os.path.join(PROJ, "topics.md")
+
+
+def banked_marker(draft: str) -> str:
+    return "- [~] BANKED drafts/%s" % os.path.basename(draft)
+
+
+def ensure_topic_marked(draft: str, day: str) -> bool:
+    """Make sure the topic this draft used is no longer unchecked.
+
+    The writer session is told to mark it in step 11. If it did not, mark the
+    first unchecked entry in ## Queue - step 1's own rule for which topic a
+    session takes - so the next session cannot draft the same one again.
+    """
+    try:
+        with open(TOPICS, encoding="utf-8", newline="") as fh:
+            text = fh.read()
+    except OSError:
+        return False
+    if banked_marker(draft) in text:
+        return True
+    eol = "\r\n" if "\r\n" in text else "\n"
+    lines = text.split(eol)
+    try:
+        q = next(i for i, l in enumerate(lines) if l.strip() == "## Queue")
+    except StopIteration:
+        return False
+    end = next((i for i in range(q + 1, len(lines)) if lines[i].startswith("## ")),
+               len(lines))
+    for i in range(q, end):
+        if lines[i].startswith("- [ ] "):
+            title = lines[i][len("- [ ] "):]
+            lines[i] = "%s (%s)" % (banked_marker(draft), day)
+            lines.insert(i + 1, "      " + title)
+            with open(TOPICS, "w", encoding="utf-8", newline="") as fh:
+                fh.write(eol.join(lines))
+            note("the session did not mark its topic; marked the first unchecked")
+            note("        entry BANKED for %s so it is not drafted twice."
+                 % os.path.basename(draft))
+            return True
+    return False
+
+
+def mark_published(draft: str, doi: str, day: str) -> bool:
+    """Flip a BANKED marker to PUBLISHED once the paper is out."""
+    try:
+        with open(TOPICS, encoding="utf-8", newline="") as fh:
+            text = fh.read()
+    except OSError:
+        return False
+    eol = "\r\n" if "\r\n" in text else "\n"
+    lines = text.split(eol)
+    mark = banked_marker(draft)
+    for i, l in enumerate(lines):
+        if l.startswith(mark):
+            lines[i] = "- [x] PUBLISHED %s (%s) - drafts/%s" % (
+                doi, day, os.path.basename(draft))
+            with open(TOPICS, "w", encoding="utf-8", newline="") as fh:
+                fh.write(eol.join(lines))
+            return True
+    note("note: no BANKED marker for %s in topics.md to flip to PUBLISHED."
+         % os.path.basename(draft))
+    return False
+
+
+def regate(draft: str, run_date: str) -> bool:
+    """Retry the gates on a paper that is already written.
+
+    The attempt is counted BEFORE the gates run, so a crash mid-gate still
+    counts. After GATE_TRIES failures the paper is held with a reason rather
+    than retried forever; until then a failure is treated as transient -
+    usually arXiv or Crossref unreachable - because nothing written should
+    be discarded on one bad morning.
+    """
+    tries = int(field(draft, "gate_tries") or 0) + 1
+    stamp(draft, "gate_tries", str(tries))
+    name = os.path.basename(draft)
+    if gate(draft, run_date):
+        note("banked %s (gate attempt %d)" % (name, tries))
+        return True
+    if tries >= GATE_TRIES:
+        stamp(draft, "hold", "failed its gates %d times, last on %s" % (tries, run_date))
+        note("HELD %s after %d failed gate attempts - it needs a human." % (name, tries))
+    else:
+        note("%s failed its gates (attempt %d of %d); will retry next slot."
+             % (name, tries, GATE_TRIES))
+    return False
 
 
 def classify(output: str) -> str:
@@ -482,6 +671,10 @@ def main(argv: list[str] | None = None) -> int:
                          "goes to runner.log. Use this when stdout is a public "
                          "CI log and the paper is not public yet.")
     args = ap.parse_args(argv)
+    # Every child - the drafting session, publish_paper, the gates - stamps
+    # the date THIS run started on. A run that crosses midnight still files
+    # its paper under the day the slot belonged to.
+    os.environ.setdefault("ZENODO_RUN_DATE", _dt.date.today().isoformat())
 
     note("----- run starting%s -----" % (" (stage-only)" if args.stage_only else ""))
 
@@ -507,19 +700,36 @@ def main(argv: list[str] | None = None) -> int:
              % (len(drafts_md()), len(published_dois())))
         note("check: today published  = %d of %d wanted by now%s"
              % (done_today, target, (" (latest %s)" % already) if already else ""))
-        note("check: buffer           = %d ready of %d wanted%s"
-             % (len(ready_papers()), BUFFER_TARGET,
+        wrote_today = written_today(_dt.date.today().isoformat())
+        banked = len(ready_papers())
+        awaiting = len(ungated_written())
+        note("check: buffer           = %d banked, %d awaiting gates%s"
+             % (banked, awaiting,
                 ("  [IN FLIGHT: %s]" % os.path.basename(in_flight()))
                 if in_flight() else ""))
+        note("check: written today    = %d of %d" % (wrote_today, DAILY_WRITES))
         note("check: today pending    = %s"
              % (os.path.basename(todays_pending_draft() or "") or "no"))
         note("check: mode             = %s" % ("stage-only" if args.stage_only else "publish"))
-        if satisfied and not args.stage_only:
-            would = "skip (this slot's paper is already out)"
+        # Report what the run will actually do. A satisfied slot no longer
+        # just exits - it writes ahead until today's quota is met.
+        if in_flight() and not args.stage_only:
+            would = "BLOCK - an earlier publish attempt is unresolved"
+        elif satisfied and not args.stage_only:
+            if (wrote_today >= DAILY_WRITES and not awaiting) or banked >= BUFFER_MAX:
+                would = "nothing (published enough for this hour; quota met)"
+            elif minutes_to_next_publish() < PAPER_MINUTES and not awaiting:
+                would = "nothing (a publish slot opens too soon to start a paper)"
+            else:
+                would = "write ahead into the buffer (publishes nothing)"
+        elif banked and not args.stage_only:
+            would = "publish the oldest banked paper"
+        elif awaiting and not args.stage_only:
+            would = "re-gate a written paper, then publish it if it passes"
         elif todays_pending_draft() and not args.stage_only:
             would = "publish today's existing draft (no new paper)"
         else:
-            would = "write a new paper"
+            would = "write a new paper inline, then publish it"
         note("check: would            = %s" % would)
 
         # A diagnostic that prints MISSING and then reports success is the
@@ -568,15 +778,22 @@ def main(argv: list[str] | None = None) -> int:
         # both ran the publish path, and GitHub's 60-70 minute delays made the
         # cron identity unverifiable from the timings. Need is observable;
         # which-slot-am-I is not.
+        day = _dt.date.today().isoformat()
+        wrote_today = written_today(day)
         banked = len(ready_papers())
-        if banked >= BUFFER_TARGET:
-            note("        Nothing to do - this slot is finished, and the buffer")
-            note("        is full at %d." % banked)
+        pending = len(ungated_written())
+        if (wrote_today >= DAILY_WRITES and not pending) or banked >= BUFFER_MAX:
+            note("        Nothing to do - this slot is finished. Written today %d"
+                 % wrote_today)
+            note("        of %d, banked %d." % (DAILY_WRITES, banked))
             note("----- run finished -----")
             return 0
-        note("        Nothing to publish, so writing ahead instead: buffer")
-        note("        holds %d of %d wanted." % (banked, BUFFER_TARGET))
-        args.fill_buffer = BUFFER_TARGET
+        note("        Nothing to publish, so writing ahead: %d of %d written"
+             % (wrote_today, DAILY_WRITES))
+        note("        today, %d banked, %d awaiting their gates."
+             % (banked, pending))
+        args.fill_buffer = BUFFER_MAX
+        args.quota = True
 
     token = os.environ.get("ZENODO_TOKEN") or os.environ.get("ZENODO_ACCESS_TOKEN")
     if not token:
@@ -616,46 +833,79 @@ def main(argv: list[str] | None = None) -> int:
 
     # ---- writer mode: bank papers, publish nothing ------------------------
     if args.fill_buffer is not None:
+        quota = getattr(args, "quota", False)
         want = args.fill_buffer
         wrote = gated = 0
-        # Bounded per run so the job cannot be killed mid-paper. A paper
-        # is 30-90 minutes; three fits inside the writer job's timeout
-        # with room, and the buffer fills over days rather than in one
-        # very long run that risks losing the last paper to the cap.
-        while wrote < MAX_PER_RUN:
-            have = len(ready_papers())
-            if have >= want:
-                note("buffer holds %d of %d wanted - nothing to write." % (have, want))
+
+        def more_wanted() -> bool:
+            if len(ready_papers()) >= want:
+                return False
+            return not (quota and written_today(run_date) >= DAILY_WRITES)
+
+        # Nothing already written is thrown away. Finish gating earlier
+        # papers before drafting new ones: re-gating costs minutes, writing
+        # costs an hour and a topic.
+        for draft in ungated_written():
+            if regate(draft, run_date):
+                gated += 1
+
+        # Bounded per run so the job cannot be killed mid-paper. A paper is
+        # 30-90 minutes; three fits inside the job's timeout with room.
+        while wrote < MAX_PER_RUN and more_wanted():
+            # Never start a paper that could still be drafting when a publish
+            # slot opens: one concurrency group means the publish would wait
+            # behind it, and a second pending slot would cancel the first.
+            left = minutes_to_next_publish()
+            if left < PAPER_MINUTES:
+                note("not starting another paper: the next publish slot opens in"
+                     " %d minutes." % left)
                 break
-            note("buffer holds %d of %d; writing one more." % (have, want))
+            note("writing: %d of %d written today, %d banked."
+                 % (written_today(run_date), DAILY_WRITES, len(ready_papers())))
             before = set(drafts_md())
-            _f, _m, _d = write_one(cli, PROMPT_STAGE, args.quiet)
+            _f, _m, _d = write_one(cli, PROMPT_WRITE, args.quiet)
             fresh = [d for d in drafts_md() if d not in before]
             if not fresh:
-                note("FAILED: the session produced no draft; stopping rather than")
-                note("        looping. The buffer is unchanged at %d." % have)
+                note("FAILED: the session produced no draft; stopping rather")
+                note("        than looping.")
                 break
             wrote += 1
             draft = fresh[0]
-            if gate(draft, run_date):
-                gated += 1
-                note("banked %s" % os.path.basename(draft))
-            else:
-                note("%s failed its gates and stays unready - moving on."
+            # Recorded before gating, so the paper counts toward today and
+            # sorts correctly in the buffer whatever the gates decide.
+            if not stamp(draft, "written", run_date):
+                note("FAILED: could not stamp written: into %s" % draft)
+                break
+            # Before anything else: this topic must not be drafted again.
+            if not ensure_topic_marked(draft, run_date):
+                note("FAILED: could not mark the topic for %s as used; stopping"
                      % os.path.basename(draft))
-        if wrote >= MAX_PER_RUN and len(ready_papers()) < want:
-            note("stopped at the %d-paper cap for one run; the next"
-                 " writer slot continues." % MAX_PER_RUN)
-        note("writer finished: %d written, %d banked, buffer now %d."
-             % (wrote, gated, len(ready_papers())))
+                note("        rather than risk drafting the same topic twice.")
+                break
+            if regate(draft, run_date):
+                gated += 1
+
+        if wrote >= MAX_PER_RUN and more_wanted():
+            note("stopped at the %d-paper cap for one run; the next slot"
+                 " continues." % MAX_PER_RUN)
+        note("writer finished: %d written, %d banked, %d written today,"
+             " buffer now %d." % (wrote, gated, written_today(run_date),
+                                  len(ready_papers())))
         note("----- run finished -----")
-        return 0 if gated or len(ready_papers()) >= want else 1
+        return 0 if (gated or wrote or not more_wanted()) else 1
 
     # ---- publish from the buffer -----------------------------------------
     # The point of the buffer: the slow, failure-prone half (writing) is no
     # longer inside the irreversible half (publishing).
     if not args.stage_only:
         ready = ready_papers()
+        if not ready:
+            # A written paper that has not passed its gates yet is worth far
+            # more than a new one written from scratch now. Try those first.
+            for draft in ungated_written():
+                if regate(draft, run_date):
+                    break
+            ready = ready_papers()
         if ready:
             paper = ready[0]
             note("publishing from the buffer: %s (written %s, gated %s)"
@@ -665,6 +915,7 @@ def main(argv: list[str] | None = None) -> int:
             minted = draft_doi(paper)
             if resume_succeeded(rc, minted):
                 note("OK: published %s - https://doi.org/%s" % (minted, minted))
+                mark_published(paper, minted, run_date)
                 note("        buffer now holds %d." % len(ready_papers()))
                 note("----- run finished -----")
                 return 0
@@ -693,7 +944,11 @@ def main(argv: list[str] | None = None) -> int:
     prompt = PROMPT_STAGE if args.stage_only else PROMPT_PUBLISH
     dois_before = published_dois()
     drafts_before = len(drafts_md())
+    seen_before = set(drafts_md())
     failed, _minted, _drafted = write_one(cli, prompt, args.quiet)
+    for d in drafts_md():
+        if d not in seen_before and not field(d, "written"):
+            stamp(d, "written", _dt.date.today().isoformat())
 
     if failed:
         note("FAILED: no paper produced.")

@@ -167,7 +167,16 @@ check("a day with only an unpublished draft counts none",
 # Before the evening slot opens, ONE paper is the whole target. A flat target
 # of 2 would make the 08:00 retry see "one of two" and write the evening paper
 # in the morning, collapsing the spacing topics.md builds in on purpose.
-for hh in (0, 5, 8, 11, 14, 18):
+# Nothing publishes before 05:00. The old test asserted a target of 1 at
+# 00:00 - which is exactly what put two "morning" papers on Zenodo at 01:24
+# and 02:11 IST, when a delayed 23:00 retry or a 01:00 writer slot saw
+# "0 of 1 today" after midnight.
+for hh in (0, 1, 3, 4):
+    check("at %02d:00 IST nothing publishes" % hh,
+          run_ci.target_for(_dtm(2026, 9, 22, hh, 0)), 0)
+check("at 04:59 IST nothing publishes",
+      run_ci.target_for(_dtm(2026, 9, 22, 4, 59)), 0)
+for hh in (5, 8, 11, 14, 18):
     check("at %02d:00 IST the target is 1" % hh,
           run_ci.target_for(_dtm(2026, 9, 22, hh, 0)), 1)
 for hh in (19, 21, 23):
@@ -259,6 +268,144 @@ check("the guard does not count the day it was written",
       run_ci.todays_published_count("2026-09-18"), 0)
 
 run_ci.DRAFTS = real_drafts
+
+
+
+# -- writing 3-4 a day ----------------------------------------------------
+spec = tempfile.mkdtemp(prefix="run_ci_spec_")
+run_ci.DRAFTS = spec
+
+
+def mk(name, body_fields):
+    p = os.path.join(spec, name)
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write("---\n")
+        for k, v in body_fields:
+            fh.write("%s: %s\n" % (k, v))
+        fh.write("---\n\n## References\n\nX. doi:10.48550/arXiv.2601.00001\n")
+    return p
+
+
+a = mk("a.md", [("title", '"A"'), ("date", "2026-09-25")])
+check("stamp adds a missing key", run_ci.stamp(a, "written", "2026-09-25"), True)
+check("the added key reads back", run_ci.field(a, "written"), "2026-09-25")
+run_ci.stamp(a, "written", "2026-09-26")
+check("stamp replaces rather than duplicates",
+      open(a, encoding="utf-8").read().count("written:"), 1)
+check("the replaced value reads back", run_ci.field(a, "written"), "2026-09-26")
+check("stamp never touches the body",
+      "doi:10.48550/arXiv.2601.00001" in open(a, encoding="utf-8").read(), True)
+check("the body doi is still not read as the paper's",
+      run_ci.field(a, "doi"), None)
+nofm = os.path.join(spec, "nofm.md")
+open(nofm, "w", encoding="utf-8").write("no front matter here\n")
+check("stamp refuses a file with no front matter",
+      run_ci.stamp(nofm, "written", "2026-09-25"), False)
+os.remove(nofm)
+
+w1 = mk("w1.md", [("written", "2026-09-25")])
+w2 = mk("w2.md", [("written", "2026-09-25"), ("gated", "2026-09-25")])
+w3 = mk("w3.md", [("written", "2026-09-25"), ("doi", "10.5281/zenodo.9")])
+w4 = mk("w4.md", [("written", "2026-09-24")])
+held = mk("held.md", [("written", "2026-09-23"), ("hold", "failed")])
+legacy = mk("legacy.md", [("date", "2026-08-20")])   # predates the buffer
+os.remove(a)
+
+check("papers written today are counted whatever their state",
+      run_ci.written_today("2026-09-25"), 3)
+check("another day's papers are not", run_ci.written_today("2026-09-24"), 1)
+
+ug = [os.path.basename(x) for x in run_ci.ungated_written()]
+check("written-but-ungated papers are found for re-gating, oldest first",
+      ug, ["w4.md", "w1.md"])
+check("a legacy draft is never swept up for re-submission",
+      "legacy.md" in ug, False)
+check("a held paper is not re-gated", "held.md" in ug, False)
+check("a gated paper is not re-gated", "w2.md" in ug, False)
+
+# The resume path must not publish around the gates.
+p_ug = mk("today-ungated.md", [("date", "2026-09-26"), ("written", "2026-09-26")])
+p_hd = mk("today-held.md", [("date", "2026-09-26"), ("hold", "x")])
+check("resume never publishes a written paper that has not passed its gates",
+      run_ci.todays_pending_draft("2026-09-26"), None)
+p_old = mk("today-old.md", [("date", "2026-09-26")])
+check("resume still finishes an ordinary unpublished draft",
+      os.path.basename(run_ci.todays_pending_draft("2026-09-26") or ""),
+      "today-old.md")
+
+check("the daily quota is 3 to 4, as asked", run_ci.DAILY_WRITES in (3, 4), True)
+check("the runaway guard sits well above a day's writing",
+      run_ci.BUFFER_MAX >= 10 * run_ci.DAILY_WRITES // 2, True)
+
+run_ci.DRAFTS = real_drafts
+
+
+
+# -- topic bookkeeping ----------------------------------------------------
+# The writer stopped at step 8, but topics are marked in step 11 - so without
+# this, three writer sessions in one run would all take the same topic.
+tq = tempfile.mkdtemp(prefix="run_ci_topics_")
+real_topics = run_ci.TOPICS
+real_log = run_ci.LOG
+# note() appends to runner.log; in CI that is the real log in the papers
+# repo, which gets committed. Tests must not write into it.
+run_ci.LOG = os.path.join(tq, "runner.log")
+run_ci.TOPICS = os.path.join(tq, "topics.md")
+QUEUE = "\n".join([
+    "# queue", "", "## Queue", "",
+    "- [x] PUBLISHED 10.5281/zenodo.1 (2026-09-01)",
+    "      Old Paper",
+    "- [ ] First Topic",
+    "      Tension: something",
+    "- [ ] Second Topic",
+    "", "## Needs narrowing", "", "- [ ] Not In The Queue", ""])
+open(run_ci.TOPICS, "w", encoding="utf-8").write(QUEUE)
+d1 = os.path.join(tq, "first-paper.md")
+
+check("an unmarked topic is marked BANKED for the draft that used it",
+      run_ci.ensure_topic_marked(d1, "2026-09-25"), True)
+t = open(run_ci.TOPICS, encoding="utf-8").read()
+check("it is the FIRST unchecked Queue entry that gets marked",
+      "- [~] BANKED drafts/first-paper.md (2026-09-25)" in t
+      and "- [ ] First Topic" not in t, True)
+check("the title survives on the next line", "      First Topic" in t, True)
+check("the next topic is still available",
+      "- [ ] Second Topic" in t, True)
+check("entries outside ## Queue are never touched",
+      "- [ ] Not In The Queue" in t, True)
+check("marking again is a no-op, not a second consumed topic",
+      run_ci.ensure_topic_marked(d1, "2026-09-25") and
+      open(run_ci.TOPICS, encoding="utf-8").read().count("BANKED") == 1, True)
+
+check("publishing flips BANKED to PUBLISHED with the doi",
+      run_ci.mark_published(d1, "10.5281/zenodo.777", "2026-09-26"), True)
+t = open(run_ci.TOPICS, encoding="utf-8").read()
+check("no stale BANKED marker is left on a published paper",
+      "BANKED drafts/first-paper.md" in t, False)
+check("the PUBLISHED line names the doi",
+      "- [x] PUBLISHED 10.5281/zenodo.777 (2026-09-26) - drafts/first-paper.md" in t, True)
+check("flipping a paper with no marker reports it rather than inventing one",
+      run_ci.mark_published(os.path.join(tq, "never.md"), "x", "2026-09-26"), False)
+
+run_ci.TOPICS = real_topics
+run_ci.LOG = real_log
+
+
+
+# -- the writer yields to the publish slots -------------------------------
+m = run_ci.minutes_to_next_publish
+check("at 03:30 the morning slot is 90 minutes away",
+      round(m(_dtm(2026, 9, 25, 3, 30))), 90)
+check("at 03:30 the writer would not start a paper",
+      m(_dtm(2026, 9, 25, 3, 30)) < run_ci.PAPER_MINUTES, True)
+check("at 01:00 there is time for a paper before 05:00",
+      m(_dtm(2026, 9, 25, 1, 0)) >= run_ci.PAPER_MINUTES, True)
+check("at 17:30 the writer would not start a paper before 19:00",
+      m(_dtm(2026, 9, 25, 17, 30)) < run_ci.PAPER_MINUTES, True)
+check("after 19:00 the next slot is tomorrow's 05:00",
+      round(m(_dtm(2026, 9, 25, 21, 0))), 8 * 60)
+check("a whole paper fits inside the job's timeout, three times over",
+      run_ci.MAX_PER_RUN * run_ci.PAPER_MINUTES <= 340, True)
 
 
 print("")
