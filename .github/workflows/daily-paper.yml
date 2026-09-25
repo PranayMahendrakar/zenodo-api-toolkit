@@ -179,16 +179,11 @@ jobs:
           # --quiet always: this log is public and the transcript is the paper.
           flags="--quiet"
 
-          # Which cron fired decides the job. github.event.schedule is the
-          # cron string itself, so a writer slot is distinguishable from a
-          # publish slot without a second workflow file and without a second
-          # copy of the setup above.
-          case "${{ github.event.schedule }}" in
-            "30 19 * * *"|"30 21 * * *")
-              echo "writer slot: banking papers, publishing nothing"
-              flags="$flags --fill-buffer"
-              ;;
-          esac
+          # No cron matching here. The runner decides by NEED: a slot with
+          # nothing to publish writes ahead instead of exiting. Keying this
+          # off github.event.schedule failed on 2026-09-25 - both writer
+          # crons fired and both ran the publish path, and GitHub's 60-70
+          # minute delays made the cron identity unverifiable anyway.
 
           # A scheduled run ALWAYS publishes. Keyed on the event, not on the
           # input being empty: stage_only is declared `default: true`, and if

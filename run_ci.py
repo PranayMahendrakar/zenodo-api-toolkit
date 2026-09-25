@@ -559,9 +559,24 @@ def main(argv: list[str] | None = None) -> int:
              % (done_today, target))
         if already:
             note("        latest: https://doi.org/%s" % already)
-        note("        Nothing to do - this slot is finished.")
-        note("----- run finished -----")
-        return 0
+        # This slot has nothing to publish. Rather than exit, use the time to
+        # write ahead - the buffer is what stops a future writing failure from
+        # becoming a missed publication.
+        #
+        # Decided by NEED, not by which cron fired. Keying the writer off
+        # github.event.schedule failed on 2026-09-25: both writer crons fired,
+        # both ran the publish path, and GitHub's 60-70 minute delays made the
+        # cron identity unverifiable from the timings. Need is observable;
+        # which-slot-am-I is not.
+        banked = len(ready_papers())
+        if banked >= BUFFER_TARGET:
+            note("        Nothing to do - this slot is finished, and the buffer")
+            note("        is full at %d." % banked)
+            note("----- run finished -----")
+            return 0
+        note("        Nothing to publish, so writing ahead instead: buffer")
+        note("        holds %d of %d wanted." % (banked, BUFFER_TARGET))
+        args.fill_buffer = BUFFER_TARGET
 
     token = os.environ.get("ZENODO_TOKEN") or os.environ.get("ZENODO_ACCESS_TOKEN")
     if not token:
