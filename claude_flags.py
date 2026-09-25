@@ -13,6 +13,8 @@ cite_check.py / publish_paper.py but not arbitrary shell commands. Widen it
 only if a run reports a denied tool - go.log records what was refused.
 """
 
+import os
+
 ALLOWED_TOOLS = [
     "Read", "Glob", "Grep",
     "Write", "Edit", "MultiEdit", "NotebookEdit",
@@ -28,17 +30,36 @@ ALLOWED_TOOLS = [
 
 PERMISSION_MODE = "acceptEdits"
 
+# The model that writes the papers - pinned, not inherited.
+#
+# Unpinned, `claude -p` used whatever default the plan had, and CI installs
+# the newest Claude Code on every run, so the model writing papers under the
+# author's name could change after an update with nobody noticing. Chosen by
+# the author on 2026-09-25. Override without a commit through the repository
+# variable PAPER_MODEL (GitHub: Settings -> Secrets and variables -> Variables).
+# Not CLAUDE_*: that namespace is Claude Code's own - it exports CLAUDE_EFFORT
+# itself - so a variable there would silently inherit the CLI's setting.
+MODEL = os.environ.get("PAPER_MODEL", "").strip() or "claude-opus-5-5"
+
+# Opus 5.5 defaults to medium effort, one level below Opus 5. Research writing
+# is intelligence-sensitive, so ask for high explicitly rather than inherit.
+EFFORT = os.environ.get("PAPER_EFFORT", "").strip() or "high"
+
 
 def flags():
     """Flag list to splice into a claude -p invocation."""
-    return ["--permission-mode", PERMISSION_MODE,
+    # --model and --effort go BEFORE --allowedTools, which is variadic and
+    # would otherwise be the first place a mis-ordered flag gets swallowed.
+    return ["--model", MODEL, "--effort", EFFORT,
+            "--permission-mode", PERMISSION_MODE,
             "--allowedTools"] + ALLOWED_TOOLS
 
 
 def powershell_args():
     """Same flags rendered for run_daily.ps1."""
     quoted = " ".join("'%s'" % t for t in ALLOWED_TOOLS)
-    return "--permission-mode %s --allowedTools %s" % (PERMISSION_MODE, quoted)
+    return "--model %s --effort %s --permission-mode %s --allowedTools %s" % (
+        MODEL, EFFORT, PERMISSION_MODE, quoted)
 
 
 if __name__ == "__main__":

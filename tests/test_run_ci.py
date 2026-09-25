@@ -408,6 +408,44 @@ check("a whole paper fits inside the job's timeout, three times over",
       run_ci.MAX_PER_RUN * run_ci.PAPER_MINUTES <= 340, True)
 
 
+
+# -- the pinned model -----------------------------------------------------
+import importlib
+import claude_flags
+
+saved = {k: os.environ.pop(k, None) for k in ("PAPER_MODEL", "PAPER_EFFORT")}
+importlib.reload(claude_flags)
+fl = claude_flags.flags()
+check("papers are written with Claude Opus 5.5 by default",
+      fl[fl.index("--model") + 1], "claude-opus-5-5")
+check("at high effort, not Opus 5.5's medium default",
+      fl[fl.index("--effort") + 1], "high")
+check("--model comes before the variadic --allowedTools",
+      fl.index("--model") < fl.index("--allowedTools"), True)
+check("the PowerShell runner pins the same model",
+      "--model claude-opus-5-5" in claude_flags.powershell_args(), True)
+
+os.environ["PAPER_MODEL"] = "claude-sonnet-5"
+importlib.reload(claude_flags)
+check("a repository variable can switch the model without a commit",
+      claude_flags.MODEL, "claude-sonnet-5")
+os.environ["PAPER_MODEL"] = "   "
+importlib.reload(claude_flags)
+check("a blank variable falls back to the pinned default",
+      claude_flags.MODEL, "claude-opus-5-5")
+
+for k, v in saved.items():
+    if v is None:
+        os.environ.pop(k, None)
+    else:
+        os.environ[k] = v
+importlib.reload(claude_flags)
+
+check("a CLI too old for the model is terminal, not retried",
+      run_ci.classify("API Error: 400 Claude Code 2.1.241 does not support this "
+                      "model; version 2.1.280 or newer is required."), "terminal")
+
+
 print("")
 print("%d passed%s" % (PASS, ", %d FAILED" % FAIL if FAIL else ""))
 sys.exit(1 if FAIL else 0)

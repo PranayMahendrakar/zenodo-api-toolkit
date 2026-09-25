@@ -53,6 +53,11 @@ TERMINAL_PATTERNS = [
     r"invalid api key",
     r"not (logged in|authenticated)",
     r"session expired",
+    # The CLI refusing the pinned model. Starts "API Error", so without these
+    # it classified as transient and burned three attempts and fifteen
+    # minutes retrying something no amount of waiting fixes.
+    r"does not support this model",
+    r"or newer is required",
 ]
 TRANSIENT_PATTERNS = [
     r"api error",
@@ -691,6 +696,8 @@ def main(argv: list[str] | None = None) -> int:
     # diagnostic at all.
     if args.check:
         note("check: cli              = %s" % (find_cli() or "NOT FOUND"))
+        note("check: model            = %s at effort %s"
+             % (claude_flags.MODEL, claude_flags.EFFORT))
         note("check: zenodo token     = %s" % ("set" if os.environ.get("ZENODO_TOKEN")
                                                or os.environ.get("ZENODO_ACCESS_TOKEN") else "MISSING"))
         note("check: claude credential= %s" % ("oauth" if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
