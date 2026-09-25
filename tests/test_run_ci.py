@@ -446,6 +446,50 @@ check("a CLI too old for the model is terminal, not retried",
                       "model; version 2.1.280 or newer is required."), "terminal")
 
 
+
+# -- one parser: quoted dates count ----------------------------------------
+# 2026-09-25: a session wrote `date: "2026-09-25"`. The runner's regexes did
+# not accept the quotes, counted 1 published paper when there were 2, and
+# sent the next session to write and publish a THIRD. Only the session's own
+# judgement stopped it.
+qd = tempfile.mkdtemp(prefix="run_ci_quotes_")
+run_ci.DRAFTS = qd
+
+
+def fm(name, *pairs):
+    p = os.path.join(qd, name)
+    with open(p, "w", encoding="utf-8") as fh:
+        fh.write("---\n" + "".join("%s\n" % l for l in pairs) + "---\n\nbody\n")
+    return p
+
+
+fm("plain.md", "date: 2026-09-27", "doi: 10.5281/zenodo.1")
+fm("double.md", 'date: "2026-09-27"', 'doi: "10.5281/zenodo.2"')
+fm("single.md", "date: '2026-09-27'", "doi: 10.5281/zenodo.3")
+fm("comment.md", "date: 2026-09-27   # stamped at mint", "doi: 10.5281/zenodo.4")
+fm("stamped.md", "date: 2026-09-27T10:15:00", "doi: 10.5281/zenodo.5")
+
+check("a quoted date is counted - the 2026-09-25 miscount",
+      run_ci.todays_published_count("2026-09-27"), 5)
+check("a quoted doi is read without its quotes",
+      run_ci.draft_doi(os.path.join(qd, "double.md")), "10.5281/zenodo.2")
+check("a trailing YAML comment is not part of the value",
+      run_ci.day_of(os.path.join(qd, "comment.md")), "2026-09-27")
+check("a date with a time still belongs to its day",
+      run_ci.day_of(os.path.join(qd, "stamped.md")), "2026-09-27")
+check("published_dois holds bare DOIs, never quoted ones",
+      "10.5281/zenodo.2" in run_ci.published_dois()
+      and '"10.5281/zenodo.2"' not in run_ci.published_dois(), True)
+
+for f in os.listdir(qd):
+    os.remove(os.path.join(qd, f))
+fm("pending.md", 'date: "2026-09-27"')
+check("a quoted-date draft awaiting publication is still found",
+      os.path.basename(run_ci.todays_pending_draft("2026-09-27") or ""), "pending.md")
+
+run_ci.DRAFTS = real_drafts
+
+
 print("")
 print("%d passed%s" % (PASS, ", %d FAILED" % FAIL if FAIL else ""))
 sys.exit(1 if FAIL else 0)

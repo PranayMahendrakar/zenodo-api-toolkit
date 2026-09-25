@@ -33,6 +33,7 @@ import sys
 import time
 
 import claude_flags
+from md2pdf import fm_get
 
 PROJ = os.path.dirname(os.path.abspath(__file__))
 DRAFTS = os.path.join(PROJ, "drafts")
@@ -94,6 +95,14 @@ on 2026-09-24 a run tried `python3`, was refused, concluded that all code
 execution was blocked, and skipped cite_check, publish_paper and the figure
 for the whole paper. `python cite_check.py ...` would have worked. Try
 `python` before concluding anything is unavailable.
+
+Touch only the paper you are writing: its draft, its figure, daily_log.md
+and topics.md. Do not edit any other draft or any of the pipeline's own
+files. If you find something wrong outside your paper - a count that looks
+off, a record that looks inconsistent - write it plainly into daily_log.md,
+and if it bears on whether publishing is safe, do not publish. Declining is
+always safe; editing another paper's front matter can make the next run
+publish twice.
 """
 
 PROMPT_STAGE = """\
@@ -123,6 +132,14 @@ on 2026-09-24 a run tried `python3`, was refused, concluded that all code
 execution was blocked, and skipped cite_check, publish_paper and the figure
 for the whole paper. `python cite_check.py ...` would have worked. Try
 `python` before concluding anything is unavailable.
+
+Touch only the paper you are writing: its draft, its figure, daily_log.md
+and topics.md. Do not edit any other draft or any of the pipeline's own
+files. If you find something wrong outside your paper - a count that looks
+off, a record that looks inconsistent - write it plainly into daily_log.md,
+and if it bears on whether publishing is safe, do not publish. Declining is
+always safe; editing another paper's front matter can make the next run
+publish twice.
 """
 
 
@@ -199,9 +216,21 @@ def front_matter(path: str) -> str:
 
 
 def field(path: str, name: str) -> str | None:
-    """One front-matter scalar, or None. Blank counts as absent."""
-    m = re.search(r"(?m)^%s:\s*(\S.*?)\s*$" % re.escape(name), front_matter(path))
-    return m.group(1) if m else None
+    """One front-matter scalar, read the way YAML reads it - or None.
+
+    Through md2pdf.fm_get, the parser publish_paper uses, not a pattern of
+    this module's own. On 2026-09-25 a session wrote `date: "2026-09-25"` -
+    valid YAML - and this module's regexes rejected the quotes, so it counted
+    one paper published that day when there were two and sent the next
+    session to write and publish a third. Two parsers reading one file is how
+    they came to disagree; now there is one. Blank counts as absent.
+    """
+    return fm_get(front_matter(path), name) or None
+
+
+def day_of(path: str) -> str:
+    """A draft's date: as YYYY-MM-DD, or '' - tolerant of a time suffix."""
+    return (field(path, "date") or "")[:10]
 
 
 def stamp(path: str, key: str, value: str) -> bool:
@@ -292,12 +321,8 @@ def in_flight() -> str | None:
 
 
 def published_dois() -> set[str]:
-    out = set()
-    for f in drafts_md():
-        m = re.search(r"(?m)^doi:\s*(\S+)", front_matter(f))
-        if m:
-            out.add(m.group(1))
-    return out
+
+    return {d for d in (field(f, "doi") for f in drafts_md()) if d}
 
 
 BUFFER_TARGET = 4         # default N for a manual --fill-buffer
@@ -319,15 +344,10 @@ EVENING_HOUR = 19         # IST; the hour the second slot opens
 
 
 def todays_published_count(today=None):
-    """How many of today's drafts already carry a DOI."""
+    """How many of today's drafts already carry a DOI.
+    """
     today = today or _dt.date.today().isoformat()
-    n = 0
-    for f in drafts_md():
-        head = front_matter(f)
-        dated = re.search(r"(?m)^date:\s*" + re.escape(today) + r"\b", head)
-        if dated and re.search(r"(?m)^doi:\s*\S+", head):
-            n += 1
-    return n
+    return sum(1 for f in drafts_md() if day_of(f) == today and field(f, "doi"))
 
 
 def target_for(now: _dt.datetime | None = None) -> int:
@@ -363,9 +383,9 @@ def minutes_to_next_publish(now: _dt.datetime | None = None) -> float:
 
 
 def draft_doi(path: str) -> str | None:
-    """The DOI recorded in one draft's front matter, if it has one."""
-    m = re.search(r"(?m)^doi:\s*(\S+)", front_matter(path))
-    return m.group(1) if m else None
+    """The DOI recorded in one draft's front matter, if it has one.
+    """
+    return field(path, "doi")
 
 
 def resume_succeeded(rc: int, minted: str | None) -> bool:
@@ -388,11 +408,10 @@ def todays_published_doi(today: str | None = None) -> str | None:
     """
     today = today or _dt.date.today().isoformat()
     for f in drafts_md():
-        head = front_matter(f)
-        if re.search(r"(?m)^date:\s*" + re.escape(today) + r"\b", head):
-            m = re.search(r"(?m)^doi:\s*(\S+)", head)
-            if m:
-                return m.group(1)
+        if day_of(f) == today:
+            doi = field(f, "doi")
+            if doi:
+                return doi
     return None
 
 
@@ -412,10 +431,8 @@ def todays_pending_draft(today: str | None = None) -> str | None:
         # buffer's proof step and retry the same failing gates every slot.
         if field(f, "hold") or (field(f, "written") and not field(f, "gated")):
             continue
-        head = front_matter(f)
-        if re.search(r"(?m)^date:\s*" + re.escape(today) + r"\b", head):
-            if not re.search(r"(?m)^doi:\s*\S+", head):
-                return f
+        if day_of(f) == today and not field(f, "doi"):
+            return f
     return None
 
 
@@ -995,9 +1012,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if new_drafts > 0:
-        newest = max(drafts_md(), key=os.path.getmtime)
+        # The draft THIS run wrote - not the most recently modified file. On
+        # 2026-09-25 a session edited an older paper after writing its own,
+        # and this line named the edited paper instead.
+        fresh = [d for d in drafts_md() if d not in seen_before]
+        newest = fresh[0] if fresh else max(drafts_md(), key=os.path.getmtime)
         note("FAILED: a draft was written but no DOI was minted - %s"
              % os.path.basename(newest))
+        if field(newest, "gated"):
+            note("        It passed every gate and is banked, so the next slot")
+            note("        publishes it from the buffer. Nothing written is lost.")
         note("        Either the run stopped early or it deliberately staged the")
         note("        paper. Read the session output above, then finish it with:")
         note("        python publish_paper.py drafts/%s --publish --yes"
