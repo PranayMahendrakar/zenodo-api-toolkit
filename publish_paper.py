@@ -70,6 +70,8 @@ import sys
 import html
 import time
 import subprocess
+import shutil
+import tempfile
 
 import requests
 
@@ -419,8 +421,14 @@ def main():
 
     pdf = opt("--pdf") or os.path.splitext(src)[0] + ".pdf"
     if not dry_run:
-        if (not os.path.isfile(pdf)) or os.path.getmtime(pdf) < os.path.getmtime(src):
-            print("rendering PDF (missing or older than the markdown) ...")
+        # Always re-rendered, unless a human handed over a PDF with --pdf. The
+        # old rule - render only when the PDF is missing or older than the
+        # markdown - kept a PDF made by an older renderer: a paper banked
+        # before the two-column layout (29 Sep 2026) would have gone out in
+        # the old single-column one. A render takes seconds; the PDF on
+        # Zenodo is permanent.
+        if not opt("--pdf") or not os.path.isfile(pdf):
+            print("rendering PDF ...")
             subprocess.check_call([sys.executable,
                                    os.path.join(HERE, "md2pdf.py"), src, pdf])
 
@@ -734,10 +742,32 @@ def main():
             "  gets published twice. Add `deposition: %s` by hand, then re-run."
             % (dep_id, src, dep_id))
 
-    with open(pdf, "rb") as fh:
+    # A standard paper prints its own DOI. It exists from this moment - Zenodo
+    # reserves it with the deposition - so render once more with it on the
+    # title page and in the end matter, and upload that. md2pdf re-verifies
+    # every word of the new file. Anything going wrong here falls back to the
+    # PDF every gate already passed: a missing DOI line is cosmetic, a failed
+    # upload after the deposition exists is not.
+    upload = pdf
+    reserved = ((dep.get("metadata") or {}).get("prereserve_doi") or {}).get("doi")
+    if reserved and not opt("--pdf"):
+        doi_dir = tempfile.mkdtemp(prefix="doi_pdf_")
+        doi_pdf = os.path.join(doi_dir, os.path.basename(pdf))
+        rc = subprocess.call([sys.executable, os.path.join(HERE, "md2pdf.py"),
+                              src, doi_pdf, "--doi", reserved])
+        if rc == 0 and os.path.isfile(doi_pdf):
+            upload = doi_pdf
+            print("rendered with its reserved DOI %s" % reserved)
+        else:
+            print("note: could not render with the DOI (exit %d); uploading the"
+                  " gated PDF without it" % rc)
+
+    with open(upload, "rb") as fh:
         r = s.put("%s/%s" % (bucket, os.path.basename(pdf)), data=fh)
     if not r.ok:
         die("upload failed: %s %s" % (r.status_code, r.text[:300]))
+    if upload != pdf:
+        shutil.copyfile(upload, pdf)            # the repo keeps what Zenodo has
     print("uploaded %s bytes, checksum %s" % (r.json()["size"], r.json()["checksum"]))
 
     r = s.put("%s/api/deposit/depositions/%s" % (BASE, dep_id), json=meta)

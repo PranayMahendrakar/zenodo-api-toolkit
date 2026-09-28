@@ -190,7 +190,9 @@ jobs:
 
       - name: Unit tests
         working-directory: papers
-        run: python tests/test_run_ci.py
+        run: |
+          python tests/test_run_ci.py
+          python tests/test_md2pdf.py
 
       # Started early on purpose. GitHub runs its own schedule late - a median
       # of about two hours, up to five, measured from 25 Sep 2026 - so the
