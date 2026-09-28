@@ -423,17 +423,22 @@ def cmd_list(args):
 
 # ------------------------------------------------------ new version command
 
-def build_metadata(old_meta, title=None, version=None):
+def build_metadata(old_meta, title=None, version=None, keep_date=False,
+                   notes=None):
     """Carry the previous version's metadata forward, minus anything Zenodo
-    assigns itself, with today's publication date."""
+    assigns itself, with today's publication date - or the previous one's,
+    with keep_date, for a correction that should not read as new work."""
     meta = copy.deepcopy(old_meta or {})
     for key in SERVER_OWNED:
         meta.pop(key, None)
-    meta["publication_date"] = date.today().isoformat()
+    if not (keep_date and meta.get("publication_date")):
+        meta["publication_date"] = date.today().isoformat()
     if title:
         meta["title"] = title
     if version:
         meta["version"] = version
+    if notes:
+        meta["notes"] = notes
     return meta
 
 
@@ -558,7 +563,8 @@ def cmd_new(args):
              "unpublished draft should just be edited in place." % (src_id, state))
 
     old_meta = source.get("metadata") or {}
-    new_meta = build_metadata(old_meta, args.title, args.version)
+    new_meta = build_metadata(old_meta, args.title, args.version,
+                              args.keep_date, args.notes)
     inherited = source.get("files") or []
     is_last = version_relation(source).get("is_last")
 
@@ -860,6 +866,14 @@ def parse_args(argv):
                         help="override the title on the new version.")
     parser.add_argument("--version", metavar="TEXT",
                         help="set metadata.version on the new version, e.g. 2.0.")
+    parser.add_argument("--keep-date", action="store_true",
+                        help="keep the previous version's publication_date "
+                             "instead of today's. For a correction: the work was "
+                             "published then, and a listing sorted by date should "
+                             "not show it as new.")
+    parser.add_argument("--notes", metavar="TEXT",
+                        help="set metadata.notes on the new version - where a "
+                             "revision says what changed.")
     parser.add_argument("--publish", action="store_true",
                         help="after building the draft, show the diff and publish "
                              "once you type the record title. IRREVERSIBLE: mints "
@@ -887,7 +901,9 @@ def main(argv):
                                       ("--dry-run", args.dry_run),
                                       ("--keep-files", args.keep_files),
                                       ("--title", args.title),
-                                      ("--version", args.version)) if given]
+                                      ("--version", args.version),
+                                      ("--keep-date", args.keep_date),
+                                      ("--notes", args.notes)) if given]
     if stray:
         fail("these flags only mean something together with --new: %s\n"
              "Nothing was sent to Zenodo. See --help." % ", ".join(stray))
