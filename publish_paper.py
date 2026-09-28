@@ -432,6 +432,33 @@ def main():
                 die("cite_check failed (exit %d). Fix the citations, or pass "
                     "--skip-cite-check to override." % rc)
 
+        # ---- the originality gate ---------------------------------------
+        # cite_check proves every citation is REAL. Nothing proved the text
+        # was not copied from those citations, or recycled from the author's
+        # own earlier papers - at two a day on neighbouring themes, the
+        # likelier failure. originality_check compares the paper's own prose
+        # (quotations excluded: an attributed quote is not plagiarism) with
+        # every cited arXiv abstract and every other draft.
+        #
+        # It has no skip flag on purpose, and a check that could not run fully
+        # does not count as a pass. A paper that passes is stamped `original:`
+        # so a later attempt on the same file does not repeat the lookups.
+        if not scalar(fm, "original"):
+            print("checking originality ...")
+            rc = subprocess.call([sys.executable,
+                                  os.path.join(HERE, "originality_check.py"), src])
+            if rc == 2:
+                die("the originality check found copied or recycled text (above).\n"
+                    "  A DOI cannot be withdrawn. Put those passages in the paper's\n"
+                    "  own words, or quote and attribute them.")
+            if rc != 0:
+                die("the originality check could not run fully (exit %d): too few\n"
+                    "  cited sources could be fetched to call this paper original.\n"
+                    "  Retry when DataCite is reachable." % rc)
+            if not write_front_matter(src, [("original", time.strftime("%Y-%m-%d"))]):
+                die("the paper passed the originality check but the result could\n"
+                    "  not be recorded in %s" % src)
+
     creator = {"name": surname_first(author)}
     if orcid:
         creator["orcid"] = orcid
