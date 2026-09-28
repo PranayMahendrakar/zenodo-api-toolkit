@@ -81,8 +81,9 @@ jobs:
     # A paper is 30-90 minutes. Generous rather than tight, so a slow citation
     # gate does not lose the work, but bounded so a hung session cannot burn
     # six hours.
-    # The writer may draft up to three papers at 30-90 minutes each, so it
-    # needs far more than a publish run does. Publishers finish in minutes and
+    # A writer run reviews and drafts for hours - run_ci.py budgets itself
+    # RUN_MINUTES of this and pushes after every finished step, so hitting the
+    # cap costs at most the step in progress. Publishers finish in minutes and
     # are unaffected by the larger cap.
     timeout-minutes: 340
 
@@ -217,7 +218,7 @@ jobs:
             fi
           done
 
-      - name: Write the paper
+      - name: Review, write and publish
         working-directory: papers
         env:
           ZENODO_TOKEN: ${{ secrets.ZENODO_TOKEN }}
@@ -288,7 +289,11 @@ jobs:
           cd papers
           git config user.name  "zenodo-daily-paper[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A drafts topics.md daily_log.md published_records.md zenodo_stats_history.csv || true
+          # Only paths that exist: one missing pathspec makes `git add` add
+          # nothing at all, and the `|| true` would hide it.
+          for p in drafts reviews topics.md daily_log.md published_records.md zenodo_stats_history.csv; do
+            if [ -e "$p" ]; then git add -A "$p"; fi
+          done
           git add -f runner.log || true
           if git diff --cached --quiet; then
             echo "nothing to commit"

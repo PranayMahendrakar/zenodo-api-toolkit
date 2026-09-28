@@ -227,8 +227,11 @@ def paper(name, **fields):
     return os.path.join(buf, name)
 
 
-p_ready_old = paper("ready-old.md", written="2026-09-20", gated="2026-09-20")
-p_ready_new = paper("ready-new.md", written="2026-09-23", gated="2026-09-23")
+p_ready_old = paper("ready-old.md", written="2026-09-20", gated="2026-09-20",
+                    reviewed="2026-09-20")
+p_ready_new = paper("ready-new.md", written="2026-09-23", gated="2026-09-23",
+                    reviewed="2026-09-24")
+p_unreviewed = paper("unreviewed.md", written="2026-09-19", gated="2026-09-19")
 p_ungated = paper("ungated.md", written="2026-09-21")
 p_held = paper("held.md", written="2026-09-19", gated="2026-09-19", hold="bad figure")
 p_done = paper("done.md", written="2026-09-18", gated="2026-09-18",
@@ -248,6 +251,8 @@ check("ready papers come out oldest-written first (FIFO)",
       ready[0], "ready-old.md")
 
 check("an ungated draft is never selected", "ungated.md" in ready, False)
+check("a gated paper nobody has reviewed is never selected, however old",
+      "unreviewed.md" in ready, False)
 check("a held paper is never selected", "held.md" in ready, False)
 check("a published paper is never re-selected", "done.md" in ready, False)
 check("a paper mid-attempt is never selected", "inflight.md" in ready, False)
@@ -333,7 +338,9 @@ check("resume still finishes an ordinary unpublished draft",
       os.path.basename(run_ci.todays_pending_draft("2026-09-26") or ""),
       "today-old.md")
 
-check("the daily quota is 3 to 4, as asked", run_ci.DAILY_WRITES in (3, 4), True)
+check("the daily quota is 3, as asked on 2026-09-29", run_ci.DAILY_WRITES, 3)
+check("three a day against two published grows the buffer",
+      run_ci.DAILY_WRITES > run_ci.DAILY_TARGET, True)
 check("the runaway guard sits well above a day's writing",
       run_ci.BUFFER_MAX >= 10 * run_ci.DAILY_WRITES // 2, True)
 
@@ -488,6 +495,219 @@ check("a quoted-date draft awaiting publication is still found",
       os.path.basename(run_ci.todays_pending_draft("2026-09-27") or ""), "pending.md")
 
 run_ci.DRAFTS = real_drafts
+
+
+# -- independent review -----------------------------------------------------
+# 2026-09-28: a review of nine banked papers found 26 confirmed errors - a
+# 2.9-point gain written as "five points", figures against the wrong models -
+# every one of which had passed cite_check and the originality gate. From
+# 2026-09-29 nothing the pipeline wrote publishes until a separate session has
+# checked it against its sources and passed it.
+rv = tempfile.mkdtemp(prefix="run_ci_review_")
+saved_paths = (run_ci.PROJ, run_ci.DRAFTS, run_ci.REVIEWS, run_ci.TOPICS,
+               run_ci.LOG, run_ci.run_session, run_ci.regate, run_ci.RETRY_WAIT)
+run_ci.PROJ = rv
+run_ci.DRAFTS = os.path.join(rv, "drafts")
+run_ci.REVIEWS = os.path.join(rv, "reviews")
+run_ci.TOPICS = os.path.join(rv, "topics.md")
+run_ci.LOG = os.path.join(rv, "runner.log")
+os.makedirs(run_ci.DRAFTS)
+open(run_ci.TOPICS, "w", encoding="utf-8").write("## Queue\n")
+
+
+def rdraft(name, *pairs, body="The paper says five points."):
+    p = os.path.join(run_ci.DRAFTS, name)
+    with open(p, "w", encoding="utf-8", newline="") as fh:
+        fh.write("---\n" + "".join("%s\n" % l for l in pairs) + "---\n\n" + body + "\n")
+    return p
+
+
+def raw(p):
+    with open(p, "rb") as fh:
+        return fh.read()
+
+
+GATED = ("written: 2026-09-29", "gated: 2026-09-29", "original: 2026-09-29")
+d = rdraft("paper.md", 'title: "P"', *GATED)
+other = rdraft("other.md", 'title: "O"', "written: 2026-09-20", "gated: 2026-09-20",
+               "reviewed: 2026-09-21")
+d_raw, other_raw = raw(d), raw(other)
+
+check("the verdict is read from its line",
+      (open(os.path.join(rv, "v1.md"), "w").write("x\nVERDICT: REVISE\n"),
+       run_ci.parse_verdict(os.path.join(rv, "v1.md")))[1], "REVISE")
+check("a bolded verdict still counts",
+      (open(os.path.join(rv, "v2.md"), "w").write("**VERDICT: PASS**\n"),
+       run_ci.parse_verdict(os.path.join(rv, "v2.md")))[1], "PASS")
+check("the last verdict in the file wins",
+      (open(os.path.join(rv, "v3.md"), "w").write("VERDICT: REVISE\n...\nVERDICT: PASS\n"),
+       run_ci.parse_verdict(os.path.join(rv, "v3.md")))[1], "PASS")
+check("a report that merely mentions verdicts has none",
+      (open(os.path.join(rv, "v4.md"), "w").write("the VERDICT: line is missing, PASS\n"),
+       run_ci.parse_verdict(os.path.join(rv, "v4.md")))[1], None)
+check("no report is no verdict",
+      run_ci.parse_verdict(os.path.join(rv, "missing.md")), None)
+
+check("a gated, unreviewed paper needs review", run_ci.review_state(d), "review")
+check("a reviewed paper needs nothing", run_ci.review_state(other), None)
+check("an ungated paper is not reviewed before its gates pass",
+      run_ci.review_state(rdraft("ug.md", "written: 2026-09-29")), None)
+check("a held paper is not reviewed",
+      run_ci.review_state(rdraft("h.md", *GATED, "hold: x")), None)
+check("a legacy draft is never swept into review",
+      run_ci.review_state(rdraft("legacy.md", "gated: 2026-09-01")), None)
+for n in ("ug.md", "h.md", "legacy.md"):
+    os.remove(os.path.join(run_ci.DRAFTS, n))
+check("the queue holds exactly the paper awaiting review",
+      [(os.path.basename(p), s) for p, s in run_ci.review_queue()],
+      [("paper.md", "review")])
+
+calls = []
+
+
+def fake_session(outputs):
+    """A stand-in for claude -p: each call pops one scripted behaviour."""
+    def run(cli, prompt, quiet, produced):
+        calls.append(prompt)
+        act = outputs.pop(0)
+        return act(prompt) or ("ok" if produced() else "empty")
+    return run
+
+
+def review_says(verdict, meddle=False):
+    def act(prompt):
+        rnd = int(prompt.split("review round ")[1].split(".")[0])
+        os.makedirs(run_ci.REVIEWS, exist_ok=True)
+        open(run_ci.review_path(d, rnd), "w").write(
+            "# Review\n1. SERIOUS - five points; the source says 2.9.\nVERDICT: %s\n" % verdict)
+        if meddle:          # a reviewer that "helpfully" edits what it judges
+            open(d, "a").write("\nreviewer edit\n")
+            open(other, "a").write("\nreviewer edit\n")
+            rdraft("stray.md", 'title: "S"')
+    return act
+
+
+def revise(prompt):
+    txt = open(d, encoding="utf-8").read()
+    # A reviser that fixes the body - and also tries to mark itself reviewed.
+    txt = txt.replace("five points", "2.9 points").replace("---\n\n", "reviewed: yes\n---\n\n", 1)
+    open(d, "w", encoding="utf-8").write(txt)
+    with open(run_ci.review_path(d, 1), "a") as fh:
+        fh.write("\n## Response\n1. FIXED - five -> 2.9\n")
+
+
+gate_saw = []
+
+
+def fake_regate(draft, run_date):
+    gate_saw.append(run_ci.field(draft, "gated"))
+    run_ci.stamp(draft, "gated", run_date)
+    return True
+
+
+run_ci.regate = fake_regate
+run_ci.RETRY_WAIT = 0
+
+# Round 1: REVISE, from a reviewer that also edits drafts.
+run_ci.run_session = fake_session([review_says("REVISE", meddle=True)])
+check("round 1 asks for a revision",
+      run_ci.review_step("cli", d, "2026-09-29", True), "revise")
+check("the reviewer's edit to the paper it judged is undone", raw(d) != d_raw
+      and b"reviewer edit" not in raw(d), True)
+check("the reviewer's edit to another draft is undone", raw(other), other_raw)
+check("a draft the reviewer created is removed",
+      os.path.exists(os.path.join(run_ci.DRAFTS, "stray.md")), False)
+check("the round and verdict are recorded",
+      (run_ci.field(d, "review_rounds"), run_ci.field(d, "review_verdict")),
+      ("1", "REVISE"))
+check("a paper under revision is not ready", d in run_ci.ready_papers(), False)
+check("it now needs revising", run_ci.review_state(d), "revise")
+check("the review prompt formats and names its report",
+      "reviews/paper.r1.md" in calls[-1] and "{" not in calls[-1], True)
+
+# The revision.
+run_ci.run_session = fake_session([revise])
+check("the revision is re-gated", run_ci.review_step("cli", d, "2026-09-29", True),
+      "revised")
+check("the old gates were voided before the new ones ran", gate_saw[-1], None)
+check("the fix to the body is kept", "2.9 points" in open(d).read(), True)
+check("a reviser cannot mark its own paper reviewed",
+      run_ci.field(d, "reviewed"), None)
+check("the revision is recorded", run_ci.field(d, "revised_round"), "1")
+check("a revised paper goes back for another review", run_ci.review_state(d), "review")
+check("the revise prompt formats", "{" not in calls[-1]
+      and "reviews/paper.r1.md" in calls[-1], True)
+
+# Round 2: PASS.
+run_ci.run_session = fake_session([review_says("PASS")])
+check("round 2 passes it", run_ci.review_step("cli", d, "2026-09-29", True), "passed")
+check("a re-review is told about the previous round",
+      "reviews/paper.r1.md" in calls[-1] and "re-review" in calls[-1], True)
+check("a passed paper is stamped reviewed", run_ci.field(d, "reviewed"), "2026-09-29")
+check("and is ready to publish", d in run_ci.ready_papers(), True)
+check("and leaves the review queue", run_ci.review_state(d), None)
+
+# REJECT holds at once.
+r = rdraft("rej.md", 'title: "R"', *GATED)
+run_ci.run_session = fake_session([lambda p: open(run_ci.review_path(r, 1), "w")
+                                   .write("VERDICT: REJECT\n") and None])
+check("a rejected paper is held", run_ci.review_step("cli", r, "2026-09-29", True), "held")
+check("with the reason on record", "rejected" in (run_ci.field(r, "hold") or ""), True)
+
+# The last allowed round still saying REVISE holds rather than looping.
+m = rdraft("max.md", 'title: "M"', *GATED,
+           "review_rounds: %d" % (run_ci.MAX_REVIEW_ROUNDS - 1),
+           "review_verdict: REVISE", "revised_round: %d" % (run_ci.MAX_REVIEW_ROUNDS - 1))
+run_ci.run_session = fake_session([lambda p: open(run_ci.review_path(m, run_ci.MAX_REVIEW_ROUNDS), "w")
+                                   .write("VERDICT: REVISE\n") and None])
+check("a paper still failing its last round is held, not revised forever",
+      run_ci.review_step("cli", m, "2026-09-29", True), "held")
+
+# An API outage says nothing about the paper.
+o = rdraft("outage.md", 'title: "O"', *GATED)
+run_ci.run_session = lambda *a: "down"
+check("an API outage stops review work", run_ci.review_step("cli", o, "2026-09-29", True),
+      "down")
+check("and does not count against the paper", run_ci.field(o, "review_tries"), None)
+check("an outage never holds a paper", run_ci.field(o, "hold"), None)
+
+# A session that runs but writes no verdict does count, and ends in a hold.
+run_ci.run_session = lambda *a: "empty"
+got = [run_ci.review_step("cli", o, "2026-09-29", True) for _ in range(run_ci.REVIEW_TRIES)]
+check("sessions that leave no verdict are held after %d tries" % run_ci.REVIEW_TRIES,
+      got[-1], "held")
+check("a verdict-less session never marks a paper reviewed",
+      run_ci.field(o, "reviewed"), None)
+
+# A report already on disk (the run was cut off after the session) is used.
+k = rdraft("kept.md", 'title: "K"', *GATED)
+os.makedirs(run_ci.REVIEWS, exist_ok=True)
+open(run_ci.review_path(k, 1), "w").write("VERDICT: PASS\n")
+n_calls = len(calls)
+run_ci.run_session = fake_session([])
+check("a finished review on disk is not run again",
+      (run_ci.review_step("cli", k, "2026-09-29", True), len(calls) == n_calls),
+      ("passed", True))
+
+# The hole this closes: a pipeline paper dated today, gated, unreviewed.
+t = rdraft("today.md", 'title: "T"', "date: 2026-09-29", *GATED)
+check("an unreviewed pipeline paper dated today is never 'today's pending draft'",
+      run_ci.todays_pending_draft("2026-09-29"), None)
+
+check("unstamp removes exactly one key",
+      (run_ci.unstamp(t, "gated"), run_ci.field(t, "gated"), run_ci.field(t, "written")),
+      (True, None, "2026-09-29"))
+check("unstamp of an absent key reports False", run_ci.unstamp(t, "gated"), False)
+
+check("checkpoint is a no-op outside CI",
+      (os.environ.pop("GITHUB_ACTIONS", None), run_ci.checkpoint("test"))[1], None)
+check("run_ci keeps well inside the job's 340-minute cap",
+      run_ci.RUN_MINUTES + 30 <= 340, True)
+check("a review round fits in what a slot leaves",
+      run_ci.REVIEW_MINUTES < run_ci.RUN_MINUTES, True)
+
+(run_ci.PROJ, run_ci.DRAFTS, run_ci.REVIEWS, run_ci.TOPICS, run_ci.LOG,
+ run_ci.run_session, run_ci.regate, run_ci.RETRY_WAIT) = saved_paths
 
 
 print("")

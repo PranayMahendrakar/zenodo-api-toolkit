@@ -181,6 +181,145 @@ Never pass --skip-cite-check or --force-duplicate.
 """ + PROMPT_STAGE[PROMPT_STAGE.index("Do the work yourself"):]
 
 
+SESSION_RULES = """
+Do the work yourself, now, in this session. Do NOT delegate it to a background
+agent or a background task, and do NOT end your turn early to report that
+something is still running: this is a one-shot non-interactive invocation, so
+the process exits when your turn ends and anything left in the background is
+killed unfinished. There is nobody to report back to.
+
+Run scripts with `python`, which is the allowed interpreter. If a command is
+refused, the refusal is about that exact command, not the session: try
+`python` before concluding that code cannot run.
+"""
+
+PROMPT_REVIEW = """\
+You are the independent reviewer of one paper in this repository:
+    drafts/{slug}.md
+This is review round {round}. You did not write this paper and you are not here
+to polish its prose. You are here to find what would embarrass its author once
+it carries a permanent DOI, and to prove each finding against the source before
+you report it. After you, nobody reads this paper before Zenodo does.
+
+Do NOT edit drafts/{slug}.md or any other draft. Your only output is the report
+file reviews/{slug}.r{round}.md. The runner restores any draft you change.
+
+Read the paper in full first. Then work through three lenses, in this order.
+
+1. FIDELITY - the lens that matters most. The last review of nine papers found
+   26 confirmed errors of exactly this kind, all of which had passed every
+   automated gate: a 2.9-point gain written as "five points", a similarity
+   figure attributed to the wrong pair of models, values listed against the
+   wrong systems, a source table's contradicting row left out. For EVERY number
+   and every specific claim the paper attributes to a source - in the prose,
+   the table and the figure - open the source and check it: the abstract page
+   (https://arxiv.org/abs/<id>) and, when the number is not in the abstract,
+   the full text (https://arxiv.org/html/<id>, or the PDF). For a reference
+   with only a DOI, use doi.org or api.crossref.org. Check that the number is
+   right, that it measures what the paper says it measures, that it belongs to
+   the system and setting the paper names, and that the paper does not state
+   the result more strongly or more generally than the source does. A number
+   you could not find in the source is a finding, not a pass.
+
+2. SUBSTANCE. Does the argument follow from the evidence cited? Look for claims
+   beyond what any cited result supports, "we show" or "our results" for work
+   nobody here ran, counter-evidence the paper cites and then ignores, internal
+   contradictions, a table or figure whose values disagree with the prose, and
+   an algorithm block that does not state the decision the paper analyses.
+
+3. NOVELTY. Compare the paper's central question with the title and the
+   "## Abstract" section of every other file in drafts/ (grep them; do not read
+   every paper in full). Is it substantially a question the author has already
+   written - the same question in other words, or a narrow slice of an
+   existing paper? If so, name that paper.
+
+Then be your own sceptic. For every finding you mean to mark SERIOUS, go back to
+the source once more and confirm it, quoting the source's exact words. Drop
+anything you cannot substantiate: a wrong finding costs the author a correct
+sentence.
+
+SERIOUS - a misreported number or attribution; a claim the source does not
+          support; an overclaim that changes what the paper asserts; a value in
+          a table or figure that no cited source reports; an internal
+          contradiction on a point the argument needs.
+MINOR   - anything else worth fixing: wording, emphasis, a missing caveat that
+          does not change a conclusion.
+
+PASS    - no SERIOUS finding survives your own check. The paper can publish.
+REVISE  - SERIOUS findings exist, and each can be fixed by correcting or
+          removing the claims involved without changing the paper's thesis.
+REJECT  - the thesis does not survive the literature, the central question
+          duplicates one of the author's existing papers, or the evidence is
+          substantially fabricated. REJECT holds the paper for the author.
+{previous}
+Write reviews/{slug}.r{round}.md in this shape:
+
+    # Review round {round}: drafts/{slug}.md
+    ## Findings
+    1. SERIOUS - <section, table or figure> - The paper says: "<its exact
+       words>". The source (<citation>) says: "<its exact words>".
+       Fix: <the correction>.
+    2. MINOR - ...
+    ## Checked
+    <one line: how many attributed claims you checked, against how many
+     sources>
+    VERDICT: PASS
+
+The last line of the file must be exactly one of `VERDICT: PASS`,
+`VERDICT: REVISE` or `VERDICT: REJECT`. The runner reads that line and nothing
+else, so a report without it counts as no review at all.
+
+Take the time this needs. A review that opens a handful of sources is not a
+review; the fidelity lens alone means opening most of the references.
+""" + SESSION_RULES
+
+PROMPT_REREVIEW = """
+This is a re-review. The previous round's report is reviews/{slug}.r{prev}.md,
+and the reviser's response is appended to it under "## Response". First check
+every SERIOUS finding from that round: it stands unless it was either corrected
+properly or rebutted with the source's own words. Then check each passage the
+response says was changed, because a correction can introduce a new error.
+Re-auditing the rest of the paper from scratch is not required; report a new
+SERIOUS finding elsewhere only if you come across one.
+"""
+
+PROMPT_REVISE = """\
+You are revising one paper in response to an independent review:
+    drafts/{slug}.md
+    reviews/{slug}.r{round}.md   (the review; its verdict was REVISE)
+
+Work through every finding in the review, SERIOUS ones first. Before acting on
+a finding, check it against the source yourself - reviewers are sometimes
+wrong. Open the source and read what it actually says.
+  * If the finding is right, correct the paper: fix the number, the
+    attribution or the scope, or remove the claim if the source cannot carry
+    it. Say the corrected thing in your own words; a source's exact words go in
+    quotation marks with the citation.
+  * If the finding is wrong, leave the paper as it is and rebut the finding
+    with the source's exact words.
+Make no change the review did not ask for, beyond what a correction needs to
+read properly. Keep the paper's structure, its table, its algorithm block and
+its figure. If a corrected number appears in the figure, regenerate the figure
+with matplotlib the same way it was made.
+
+Then append to reviews/{slug}.r{round}.md:
+
+    ## Response
+    1. FIXED - "<old words>" -> "<new words>"
+    2. REBUTTED - the source says: "<its exact words>"
+    ...
+
+one line per finding, in the review's order, and run from the repository root:
+    python cite_check.py drafts/{slug}.md --delay 3.0
+    python originality_check.py drafts/{slug}.md
+Fix anything either one reports. The runner re-runs every gate afterwards.
+
+Touch only drafts/{slug}.md, its figure, and reviews/{slug}.r{round}.md. Do not
+change the front matter - the runner restores it. Never pass --skip-cite-check
+or --force-duplicate, and do not run publish_paper.py in any mode.
+""" + SESSION_RULES
+
+
 def note(msg: str) -> None:
     line = "%s  %s" % (_dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), msg)
     with open(LOG, "a", encoding="utf-8") as fh:
@@ -313,16 +452,16 @@ def ungated_written() -> list[str]:
 def ready_papers() -> list[str]:
     """Buffered papers proven publishable, oldest first.
 
-    `gated:` is the whole point: it is written only after the offline gates
-    actually ran and passed, so selection never rests on a session's report
-    about its own work. A paper on hold, already published, or mid-attempt is
-    not ready.
+    `gated:` is written only after the offline gates actually ran and passed,
+    and `reviewed:` only after an independent review returned PASS - so
+    selection never rests on a session's report about its own work. A paper
+    on hold, already published, or mid-attempt is not ready.
     """
     out = []
     for f in drafts_md():
         if field(f, "doi") or field(f, "hold") or field(f, "deposition"):
             continue
-        if field(f, "gated"):
+        if field(f, "gated") and field(f, "reviewed"):
             out.append(f)
     out.sort(key=lambda p: (field(p, "written") or "", os.path.basename(p)))
     return out
@@ -355,11 +494,33 @@ MAX_PER_RUN = 2           # papers one writer run may draft - see below
 # timed out on its third paper would lose the first two with it. Two papers
 # is ~200 minutes against a 340-minute cap, and a day has enough idle slots
 # to reach DAILY_WRITES regardless.
-DAILY_WRITES = 4          # papers to write per day - "3 to 4 daily"
+DAILY_WRITES = 3          # papers to write per day; 2 publish, so the buffer grows
 BUFFER_MAX = 40           # runaway guard: ~20 days of cover at 2/day
 GATE_TRIES = 3            # gate attempts before a written paper is held
 MORNING_HOUR = 5          # IST; nothing publishes before this
 PAPER_MINUTES = 100       # longest a paper takes, with margin
+
+# Independent review. Every gate above is mechanical: cite_check proves a
+# reference exists, originality_check that the words are not lifted. Neither
+# can see a real citation reported wrongly - and the 28 Sep review of nine
+# banked papers found 26 such errors that had passed every gate. So a paper is
+# not ready until a separate session, with no stake in the draft, has checked
+# its claims against their sources and passed it.
+REVIEWS = os.path.join(PROJ, "reviews")
+REVIEW_MINUTES = 60       # one review round, with margin
+REVISE_MINUTES = 60       # one revision plus its re-gate, with margin
+MAX_REVIEW_ROUNDS = 3     # review, revise, review, revise, review - then hold
+REVIEW_TRIES = 3          # sessions that end without a verdict before a hold
+# run_ci's own share of the job's 340-minute cap: setup, the slot wait and the
+# final push need the rest. Nothing is started that cannot finish inside it,
+# because a job that hits its timeout is cancelled and a cancelled job skips
+# the push that saves its work.
+RUN_MINUTES = 270
+_STARTED = time.monotonic()
+
+
+def minutes_left() -> float:
+    return RUN_MINUTES - (time.monotonic() - _STARTED) / 60
 
 DAILY_TARGET = 2          # papers per day
 EVENING_HOUR = 19         # IST; the hour the second slot opens
@@ -449,9 +610,10 @@ def todays_pending_draft(today: str | None = None) -> str | None:
     today = today or _dt.date.today().isoformat()
     for f in drafts_md():
         # A held paper needs a human. A paper the pipeline wrote goes through
-        # regate(), not straight to publish: resuming it here would skip the
-        # buffer's proof step and retry the same failing gates every slot.
-        if field(f, "hold") or (field(f, "written") and not field(f, "gated")):
+        # the buffer - gates, then review - and never through here: resuming
+        # it would publish around both. Writers are told to fill in `date:`,
+        # so a paper drafted today looks exactly like "today's pending draft".
+        if field(f, "hold") or field(f, "written"):
             continue
         if day_of(f) == today and not field(f, "doi"):
             return f
@@ -699,6 +861,452 @@ def write_one(cli: str, prompt: str, quiet: bool = False):
     return failed, published_dois() - dois_before, len(drafts_md()) > drafts_before
 
 
+# -- independent review ----------------------------------------------------
+
+VERDICT_RE = re.compile(r"(?m)^[ \t>*_`]*VERDICT:\s*\**\s*(PASS|REVISE|REJECT)\b")
+
+
+def unstamp(path: str, key: str) -> bool:
+    """Remove one front-matter key. True if it was there."""
+    try:
+        with open(path, encoding="utf-8", newline="") as fh:
+            text = fh.read()
+    except OSError:
+        return False
+    eol = "\r\n" if "\r\n" in text else "\n"
+    lines = text.split(eol)
+    if not lines or lines[0].strip() != "---":
+        return False
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if end is None:
+        return False
+    keep = [l for l in lines[1:end] if not l.startswith(key + ":")]
+    if len(keep) == end - 1:
+        return False
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(eol.join([lines[0]] + keep + lines[end:]))
+    return True
+
+
+def front_matter_lines(path: str) -> list[str] | None:
+    """The front matter as raw lines, delimiters included - for restoring."""
+    try:
+        with open(path, encoding="utf-8", newline="") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    eol = "\r\n" if "\r\n" in text else "\n"
+    lines = text.split(eol)
+    if not lines or lines[0].strip() != "---":
+        return None
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    return None if end is None else lines[:end + 1]
+
+
+def put_front_matter(path: str, saved: list[str]) -> bool:
+    """Put saved front matter back over whatever a session left. True if it
+    had changed. The body is the session's; the front matter is the runner's,
+    because it carries the stamps that decide what gets published."""
+    now = front_matter_lines(path)
+    if now is None or now == saved:
+        return False
+    with open(path, encoding="utf-8", newline="") as fh:
+        text = fh.read()
+    eol = "\r\n" if "\r\n" in text else "\n"
+    lines = text.split(eol)
+    with open(path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(eol.join(saved + lines[len(now):]))
+    return True
+
+
+def review_path(draft: str, rnd: int) -> str:
+    slug = os.path.splitext(os.path.basename(draft))[0]
+    return os.path.join(REVIEWS, "%s.r%d.md" % (slug, rnd))
+
+
+def parse_verdict(path: str) -> str | None:
+    """The report's verdict, or None. The last VERDICT line counts."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            found = VERDICT_RE.findall(fh.read())
+    except OSError:
+        return None
+    return found[-1] if found else None
+
+
+def review_state(f: str) -> str | None:
+    """What a buffered paper needs next: 'review', 'revise', or None.
+
+    Only pipeline papers (`written:`), only once their gates have passed, and
+    never one that is reviewed, held, published or mid-attempt. A revision
+    removes `gated:`, so a revised paper waits here until its gates pass again.
+    """
+    if not field(f, "written") or field(f, "reviewed"):
+        return None
+    if field(f, "doi") or field(f, "hold") or field(f, "deposition"):
+        return None
+    if not field(f, "gated"):
+        return None
+    rounds = int(field(f, "review_rounds") or 0)
+    if (rounds and field(f, "review_verdict") == "REVISE"
+            and int(field(f, "revised_round") or 0) < rounds):
+        return "revise"
+    return "review"
+
+
+def review_queue() -> list[tuple[str, str]]:
+    """(draft, what it needs) for every paper awaiting review work, oldest first."""
+    out = [(f, s) for f in drafts_md() for s in [review_state(f)] if s]
+    out.sort(key=lambda t: (field(t[0], "written") or "", os.path.basename(t[0])))
+    return out
+
+
+def snapshot() -> dict[str, bytes]:
+    """Every draft and the topic queue, as bytes, before a session runs."""
+    out = {}
+    for p in drafts_md() + [TOPICS]:
+        try:
+            with open(p, "rb") as fh:
+                out[p] = fh.read()
+        except OSError:
+            pass
+    return out
+
+
+def restore(snap: dict[str, bytes], allow: tuple[str, ...] = ()) -> list[str]:
+    """Undo whatever a session did to files it was not allowed to touch.
+
+    Put back every snapshotted file it changed or deleted, and remove any
+    draft it created. A reviewer that edits the paper it is judging is no
+    longer an independent check, and a session that edits ANOTHER draft's
+    front matter can make the next run publish twice.
+    """
+    fixed = []
+    for p, data in snap.items():
+        if p in allow:
+            continue
+        try:
+            with open(p, "rb") as fh:
+                same = fh.read() == data
+        except OSError:
+            same = False
+        if not same:
+            with open(p, "wb") as fh:
+                fh.write(data)
+            fixed.append(p)
+    for p in drafts_md():
+        if p not in snap and p not in allow:
+            os.remove(p)            # created seconds ago by the session itself
+            fixed.append(p)
+    return fixed
+
+
+def run_session(cli: str, prompt: str, quiet: bool, produced) -> str:
+    """Run one review or revision session with write_one's retry rules.
+
+    'ok' when produced() says the session left its output; 'down' when the
+    CLI failed on authentication or on API errors every time, which says
+    nothing about the paper and must not count against it; 'empty' when
+    sessions ran cleanly and left nothing, which does.
+    """
+    flags = claude_flags.flags()
+    verdict = "clean"
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        if attempt > 1:
+            note("retrying: attempt %d of %d" % (attempt, MAX_ATTEMPTS))
+        chunks: list[str] = []
+        proc = subprocess.Popen([cli, "-p", prompt] + flags, cwd=PROJ,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True, encoding="utf-8", errors="replace",
+                                bufsize=1)
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if not quiet:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+            chunks.append(line)
+        proc.wait()
+        out = "".join(chunks)
+        with open(LOG, "a", encoding="utf-8") as fh:
+            fh.write(out)
+        verdict = classify(out)
+        if verdict == "terminal":
+            note("FAILED: authentication problem - not retrying, this needs you.")
+            return "down"
+        if produced():
+            return "ok"
+        if attempt < MAX_ATTEMPTS:
+            note("the session left no output (%s); waiting %ds"
+                 % ("transient API problem" if verdict != "clean" else "it ended cleanly",
+                    RETRY_WAIT))
+            time.sleep(RETRY_WAIT)
+    return "empty" if verdict == "clean" else "down"
+
+
+def review_step(cli: str, draft: str, run_date: str, quiet: bool) -> str:
+    """Take ONE paper one step through review: a review round, or the
+    revision the last round asked for. Each step is a single session, so the
+    work resumes cleanly on the next slot wherever it stops.
+
+    Returns passed | revise | revised | held | failed | down.
+    """
+    name = os.path.basename(draft)
+    rounds = int(field(draft, "review_rounds") or 0)
+    os.makedirs(REVIEWS, exist_ok=True)
+
+    if review_state(draft) == "revise":
+        report = review_path(draft, rounds)
+        rel_report = os.path.relpath(report, PROJ).replace(os.sep, "/")
+        note("revising %s after review round %d (%s)" % (name, rounds, rel_report))
+        saved_fm = front_matter_lines(draft)
+        with open(draft, "rb") as fh:
+            before = fh.read()
+        snap = snapshot()
+
+        def revised() -> bool:
+            with open(draft, "rb") as fh:
+                changed = fh.read() != before
+            try:
+                with open(report, encoding="utf-8", errors="replace") as fh:
+                    answered = "## Response" in fh.read()
+            except OSError:
+                answered = False
+            return changed or answered
+
+        slug = os.path.splitext(name)[0]
+        outcome = run_session(cli, PROMPT_REVISE.format(slug=slug, round=rounds),
+                              quiet, revised)
+        for p in restore(snap, allow=(draft,)):
+            note("        the reviser changed %s; undone" % os.path.basename(p))
+        if saved_fm and put_front_matter(draft, saved_fm):
+            note("        the reviser changed the front matter; restored it")
+        if outcome != "ok":
+            return _review_failed(draft, outcome, "revision")
+        stamp(draft, "revised_round", str(rounds))
+        # The old gates proved the OLD text. Their stamps come off before
+        # anything else, so this paper can never be read as gated - and so
+        # publishable - on the strength of checks made before it changed.
+        unstamp(draft, "gated")
+        unstamp(draft, "original")
+        stamp(draft, "gate_tries", "0")
+        stamp(draft, "review_tries", "0")
+        if regate(draft, run_date):
+            return "revised"
+        return "failed"
+
+    rnd = rounds + 1
+    report = review_path(draft, rnd)
+    rel_report = os.path.relpath(report, PROJ).replace(os.sep, "/")
+    if parse_verdict(report):
+        # The session finished in a run that was cut off before its stamps.
+        note("review round %d of %s is already on disk; using it" % (rnd, name))
+    else:
+        note("reviewing %s: round %d of at most %d" % (name, rnd, MAX_REVIEW_ROUNDS))
+        slug = os.path.splitext(name)[0]
+        previous = PROMPT_REREVIEW.format(slug=slug, prev=rounds) if rounds else ""
+        snap = snapshot()
+        outcome = run_session(
+            cli, PROMPT_REVIEW.format(slug=slug, round=rnd, previous=previous),
+            quiet, lambda: parse_verdict(report) is not None)
+        # Nothing may change during a review - the paper least of all.
+        for p in restore(snap):
+            note("        the reviewer changed %s; undone" % os.path.basename(p))
+        if outcome != "ok":
+            return _review_failed(draft, outcome, "review")
+
+    verdict = parse_verdict(report)
+    stamp(draft, "review_rounds", str(rnd))
+    stamp(draft, "review_verdict", verdict)
+    stamp(draft, "review_tries", "0")
+    if verdict == "PASS":
+        stamp(draft, "reviewed", run_date)
+        note("PASSED review round %d: %s is ready to publish." % (rnd, name))
+        return "passed"
+    if verdict == "REJECT":
+        stamp(draft, "hold", "rejected by review round %d - see %s" % (rnd, rel_report))
+        note("HELD %s: review round %d rejected it (%s)." % (name, rnd, rel_report))
+        return "held"
+    if rnd >= MAX_REVIEW_ROUNDS:
+        stamp(draft, "hold", "still REVISE after %d review rounds - see %s"
+              % (rnd, rel_report))
+        note("HELD %s: still REVISE after %d rounds (%s)." % (name, rnd, rel_report))
+        return "held"
+    note("review round %d asks for revisions to %s (%s)." % (rnd, name, rel_report))
+    return "revise"
+
+
+def _review_failed(draft: str, outcome: str, what: str) -> str:
+    name = os.path.basename(draft)
+    if outcome == "down":
+        note("the %s session for %s could not run (API or login); it will be"
+             " retried next slot and does not count against the paper." % (what, name))
+        return "down"
+    tries = int(field(draft, "review_tries") or 0) + 1
+    stamp(draft, "review_tries", str(tries))
+    if tries >= REVIEW_TRIES:
+        stamp(draft, "hold", "%s sessions left no output %d times" % (what, tries))
+        note("HELD %s: %d %s sessions produced nothing." % (name, tries, what))
+        return "held"
+    note("the %s session for %s left no output (%d of %d); retrying next slot."
+         % (what, name, tries, REVIEW_TRIES))
+    return "failed"
+
+
+def checkpoint(what: str) -> None:
+    """Commit and push the run's work so far, in CI only.
+
+    Everything a run does used to be saved by one push at the very end, and
+    GitHub skips that step when a job is cancelled - which is what hitting
+    timeout-minutes is. A run now reviews and writes for hours, so each
+    finished step is pushed as it completes, and a cancellation costs at most
+    the step in progress. Best effort: the final push step still runs.
+    """
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+
+    def git(*args):
+        return subprocess.run(
+            ["git", "-c", "user.name=zenodo-daily-paper[bot]",
+             "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
+             *args], cwd=PROJ, capture_output=True, text=True)
+
+    # A missing pathspec makes `git add` add nothing at all, so name only
+    # paths that exist.
+    paths = [p for p in ("drafts", "reviews", "topics.md", "daily_log.md")
+             if os.path.exists(os.path.join(PROJ, p))]
+    git("add", "-A", *paths)
+    git("add", "-f", "runner.log")
+    if git("diff", "--cached", "--quiet").returncode == 0:
+        return
+    git("commit", "-q", "-m", "daily paper: %s" % what)
+    for _ in range(3):
+        if git("push", "-q").returncode == 0:
+            note("saved: %s" % what)
+            return
+        if git("-c", "rebase.autoStash=true", "pull", "--rebase", "-q",
+               "origin", "main").returncode != 0:
+            git("rebase", "--abort")
+            break
+    note("could not push the checkpoint (%s); the final push step retries." % what)
+
+
+def room_for(minutes: float, yield_to_slot: bool) -> bool:
+    """Is there time to start a step that can take `minutes`?"""
+    if minutes_left() < minutes:
+        return False
+    return not (yield_to_slot and minutes_to_next_publish() < minutes)
+
+
+def review_pending(run_date: str, cli: str, quiet: bool, yield_to_slot: bool,
+                   only: str | None = None) -> str:
+    """Advance papers through review, oldest first, while time allows.
+
+    Returns 'down' if the API is failing (stop all session work this run),
+    else 'ok'. Every step either advances a paper's state or counts a try
+    toward a hold, so this cannot spin; the step cap is a second guard.
+    """
+    stalled: set[str] = set()
+    for _ in range(4 * MAX_REVIEW_ROUNDS):
+        # A paper whose session just failed waits for the next slot rather
+        # than burning three more attempts back to back.
+        queue = [(d, s) for d, s in review_queue()
+                 if (only is None or d == only) and d not in stalled]
+        if not queue:
+            return "ok"
+        draft, state = queue[0]
+        need = REVIEW_MINUTES if state == "review" else REVISE_MINUTES
+        if not room_for(need, yield_to_slot):
+            note("not starting a %s of %s: too little time before %s."
+                 % (state, os.path.basename(draft),
+                    "the next publish slot" if yield_to_slot
+                    and minutes_to_next_publish() < need else "this job's timeout"))
+            return "ok"
+        result = review_step(cli, draft, run_date, quiet)
+        checkpoint("%s %s" % (state, os.path.basename(draft)))
+        if result == "down":
+            return "down"
+        if result == "failed":
+            stalled.add(draft)
+    return "ok"
+
+
+def work(cli: str, run_date: str, quiet: bool, want: int, quota: bool,
+         yield_to_slot: bool) -> tuple[int, bool, bool]:
+    """Gate, review, then write - in that order, while time allows.
+
+    Nothing already written is thrown away: re-gating costs minutes and
+    reviewing an hour, while writing costs an hour AND a topic, so earlier
+    papers are finished before new ones are started. Every finished step is
+    checkpointed. Returns (papers written, anything progressed, API down).
+    """
+    wrote = 0
+    progressed = False
+
+    def in_pipeline() -> int:
+        return len(ready_papers()) + len(review_queue()) + len(ungated_written())
+
+    def more_wanted() -> bool:
+        # `want` counts papers on their way as well as ready ones: a slot
+        # that needs one paper must not start a second while the first is
+        # still in review.
+        if in_pipeline() >= want or len(ready_papers()) >= BUFFER_MAX:
+            return False
+        return not (quota and written_today(run_date) >= DAILY_WRITES)
+
+    for draft in ungated_written():
+        if regate(draft, run_date):
+            progressed = True
+    checkpoint("gates")
+
+    if review_pending(run_date, cli, quiet, yield_to_slot) == "down":
+        return wrote, progressed, True
+
+    # Bounded per run so the job cannot be killed mid-paper.
+    while wrote < MAX_PER_RUN and more_wanted():
+        # Never start a paper that could still be drafting when a publish
+        # slot opens: one concurrency group means the publish would wait
+        # behind it, and a second pending slot would cancel the first.
+        if not room_for(PAPER_MINUTES, yield_to_slot):
+            note("not starting another paper: %s." % (
+                "the next publish slot opens in %d minutes" % minutes_to_next_publish()
+                if yield_to_slot and minutes_to_next_publish() < PAPER_MINUTES
+                else "too little of this job's time is left"))
+            break
+        note("writing: %d of %d written today, %d ready."
+             % (written_today(run_date), DAILY_WRITES, len(ready_papers())))
+        before = set(drafts_md())
+        failed, _m, _d = write_one(cli, PROMPT_WRITE, quiet)
+        fresh = [d for d in drafts_md() if d not in before]
+        if not fresh:
+            note("FAILED: the session produced no draft; stopping rather")
+            note("        than looping.")
+            return wrote, progressed, failed
+        wrote += 1
+        progressed = True
+        draft = fresh[0]
+        # Recorded before gating, so the paper counts toward today and
+        # sorts correctly in the buffer whatever the gates decide.
+        if not stamp(draft, "written", run_date):
+            note("FAILED: could not stamp written: into %s" % draft)
+            break
+        # Before anything else: this topic must not be drafted again.
+        if not ensure_topic_marked(draft, run_date):
+            note("FAILED: could not mark the topic for %s as used; stopping"
+                 % os.path.basename(draft))
+            note("        rather than risk drafting the same topic twice.")
+            break
+        regate(draft, run_date)
+        checkpoint("wrote %s" % os.path.basename(draft))
+        # Review it now if there is time; otherwise the next slot does.
+        if review_pending(run_date, cli, quiet, yield_to_slot, only=draft) == "down":
+            return wrote, progressed, True
+
+    if wrote >= MAX_PER_RUN and more_wanted():
+        note("stopped at the %d-paper cap for one run; the next slot"
+             " continues." % MAX_PER_RUN)
+    return wrote, progressed, False
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -755,33 +1363,41 @@ def main(argv: list[str] | None = None) -> int:
         wrote_today = written_today(_dt.date.today().isoformat())
         banked = len(ready_papers())
         awaiting = len(ungated_written())
-        note("check: buffer           = %d banked, %d awaiting gates%s"
-             % (banked, awaiting,
-                ("  [IN FLIGHT: %s]" % os.path.basename(in_flight()))
-                if in_flight() else ""))
+        queue = review_queue()
+        to_review = sum(1 for _, s in queue if s == "review")
+        note("check: buffer           = %d ready (gated and reviewed), %d awaiting"
+             " gates%s" % (banked, awaiting,
+                           ("  [IN FLIGHT: %s]" % os.path.basename(in_flight()))
+                           if in_flight() else ""))
+        note("check: review queue     = %d to review, %d to revise"
+             % (to_review, len(queue) - to_review))
         note("check: written today    = %d of %d" % (wrote_today, DAILY_WRITES))
         note("check: today pending    = %s"
              % (os.path.basename(todays_pending_draft() or "") or "no"))
         note("check: mode             = %s" % ("stage-only" if args.stage_only else "publish"))
-        # Report what the run will actually do. A satisfied slot no longer
-        # just exits - it writes ahead until today's quota is met.
+        # Report what the run will actually do. A satisfied slot does not just
+        # exit - it reviews and writes ahead.
+        writing = wrote_today < DAILY_WRITES and banked < BUFFER_MAX
         if in_flight() and not args.stage_only:
             would = "BLOCK - an earlier publish attempt is unresolved"
         elif satisfied and not args.stage_only:
-            if (wrote_today >= DAILY_WRITES and not awaiting) or banked >= BUFFER_MAX:
+            if not (queue or awaiting or writing):
                 would = "nothing (published enough for this hour; quota met)"
-            elif minutes_to_next_publish() < PAPER_MINUTES and not awaiting:
-                would = "nothing (a publish slot opens too soon to start a paper)"
+            elif minutes_to_next_publish() < min(REVIEW_MINUTES, PAPER_MINUTES) \
+                    and not awaiting:
+                would = "nothing (a publish slot opens too soon to start a session)"
             else:
-                would = "write ahead into the buffer (publishes nothing)"
+                would = "review and write ahead into the buffer (publishes nothing)"
         elif banked and not args.stage_only:
-            would = "publish the oldest banked paper"
-        elif awaiting and not args.stage_only:
-            would = "re-gate a written paper, then publish it if it passes"
+            would = "publish the oldest ready paper"
+        elif (queue or awaiting) and not args.stage_only:
+            would = "finish gating and reviewing a buffered paper, then publish it if it passes"
         elif todays_pending_draft() and not args.stage_only:
             would = "publish today's existing draft (no new paper)"
+        elif args.stage_only:
+            would = "write a new paper and stage it"
         else:
-            would = "write a new paper inline, then publish it"
+            would = "write and review a paper, then publish it if it passes"
         note("check: would            = %s" % would)
 
         # A diagnostic that prints MISSING and then reports success is the
@@ -834,16 +1450,18 @@ def main(argv: list[str] | None = None) -> int:
         wrote_today = written_today(day)
         banked = len(ready_papers())
         pending = len(ungated_written())
-        if (wrote_today >= DAILY_WRITES and not pending) or banked >= BUFFER_MAX:
+        queued = len(review_queue())
+        if not (queued or pending) and (wrote_today >= DAILY_WRITES
+                                        or banked >= BUFFER_MAX):
             note("        Nothing to do - this slot is finished. Written today %d"
                  % wrote_today)
-            note("        of %d, banked %d." % (DAILY_WRITES, banked))
+            note("        of %d, %d ready, none awaiting review." % (DAILY_WRITES, banked))
             note("----- run finished -----")
             return 0
-        note("        Nothing to publish, so writing ahead: %d of %d written"
+        note("        Nothing to publish, so reviewing and writing ahead: %d of %d"
              % (wrote_today, DAILY_WRITES))
-        note("        today, %d banked, %d awaiting their gates."
-             % (banked, pending))
+        note("        written today, %d ready, %d awaiting gates, %d awaiting review."
+             % (banked, pending, queued))
         args.fill_buffer = BUFFER_MAX
         args.quota = True
 
@@ -886,83 +1504,37 @@ def main(argv: list[str] | None = None) -> int:
     # ---- writer mode: bank papers, publish nothing ------------------------
     if args.fill_buffer is not None:
         quota = getattr(args, "quota", False)
-        want = args.fill_buffer
-        wrote = gated = 0
-
-        def more_wanted() -> bool:
-            if len(ready_papers()) >= want:
-                return False
-            return not (quota and written_today(run_date) >= DAILY_WRITES)
-
-        # Nothing already written is thrown away. Finish gating earlier
-        # papers before drafting new ones: re-gating costs minutes, writing
-        # costs an hour and a topic.
-        for draft in ungated_written():
-            if regate(draft, run_date):
-                gated += 1
-
-        # Bounded per run so the job cannot be killed mid-paper. A paper is
-        # 30-90 minutes; three fits inside the job's timeout with room.
-        while wrote < MAX_PER_RUN and more_wanted():
-            # Never start a paper that could still be drafting when a publish
-            # slot opens: one concurrency group means the publish would wait
-            # behind it, and a second pending slot would cancel the first.
-            left = minutes_to_next_publish()
-            if left < PAPER_MINUTES:
-                note("not starting another paper: the next publish slot opens in"
-                     " %d minutes." % left)
-                break
-            note("writing: %d of %d written today, %d banked."
-                 % (written_today(run_date), DAILY_WRITES, len(ready_papers())))
-            before = set(drafts_md())
-            _f, _m, _d = write_one(cli, PROMPT_WRITE, args.quiet)
-            fresh = [d for d in drafts_md() if d not in before]
-            if not fresh:
-                note("FAILED: the session produced no draft; stopping rather")
-                note("        than looping.")
-                break
-            wrote += 1
-            draft = fresh[0]
-            # Recorded before gating, so the paper counts toward today and
-            # sorts correctly in the buffer whatever the gates decide.
-            if not stamp(draft, "written", run_date):
-                note("FAILED: could not stamp written: into %s" % draft)
-                break
-            # Before anything else: this topic must not be drafted again.
-            if not ensure_topic_marked(draft, run_date):
-                note("FAILED: could not mark the topic for %s as used; stopping"
-                     % os.path.basename(draft))
-                note("        rather than risk drafting the same topic twice.")
-                break
-            if regate(draft, run_date):
-                gated += 1
-
-        if wrote >= MAX_PER_RUN and more_wanted():
-            note("stopped at the %d-paper cap for one run; the next slot"
-                 " continues." % MAX_PER_RUN)
-        note("writer finished: %d written, %d banked, %d written today,"
-             " buffer now %d." % (wrote, gated, written_today(run_date),
-                                  len(ready_papers())))
+        wrote, progressed, down = work(cli, run_date, args.quiet, args.fill_buffer,
+                                       quota, yield_to_slot=True)
+        note("writer finished: %d written, %d written today, %d ready, %d"
+             " awaiting review." % (wrote, written_today(run_date),
+                                    len(ready_papers()), len(review_queue())))
         note("----- run finished -----")
-        return 0 if (gated or wrote or not more_wanted()) else 1
+        return 1 if down else 0
 
     # ---- publish from the buffer -----------------------------------------
-    # The point of the buffer: the slow, failure-prone half (writing) is no
-    # longer inside the irreversible half (publishing).
+    # The point of the buffer: the slow, failure-prone half (writing and
+    # reviewing) is no longer inside the irreversible half (publishing).
     if not args.stage_only:
         ready = ready_papers()
         if not ready:
-            # A written paper that has not passed its gates yet is worth far
-            # more than a new one written from scratch now. Try those first.
-            for draft in ungated_written():
-                if regate(draft, run_date):
-                    break
+            # Nothing reviewed is waiting. Finish what is already written -
+            # gates, then review - before writing anything new, and write
+            # only if nothing at all is in the pipeline. The slot is due, so
+            # there is no later slot to yield to.
+            note("no reviewed paper is ready - finishing buffered work first.")
+            work(cli, run_date, args.quiet, 1, quota=False, yield_to_slot=False)
             ready = ready_papers()
+            if not ready and not todays_pending_draft():
+                note("FAILED: no paper passed review in time for this slot. The")
+                note("        work so far is saved; the next slot continues it.")
+                note("----- run finished -----")
+                return 1
         if ready:
             paper = ready[0]
-            note("publishing from the buffer: %s (written %s, gated %s)"
+            note("publishing from the buffer: %s (written %s, gated %s, reviewed %s)"
                  % (os.path.basename(paper), field(paper, "written") or "?",
-                    field(paper, "gated") or "?"))
+                    field(paper, "gated") or "?", field(paper, "reviewed") or "?"))
             rc = publish_existing(paper)
             minted = draft_doi(paper)
             if resume_succeeded(rc, minted):
@@ -976,10 +1548,11 @@ def main(argv: list[str] | None = None) -> int:
             note("        The gates above say why. Nothing was written twice.")
             note("----- run finished -----")
             return 1
-        note("buffer is empty - writing this one inline, as before.")
+        note("no pipeline paper is ready; publishing a hand-made draft dated today.")
 
-    # Transition path, and the resume path it replaces: a draft written today
-    # that never published. Kept so nothing already written is ever wasted.
+    # A draft dated today that the pipeline did not write - one a person made
+    # and left to publish. Pipeline papers never come through here: they
+    # publish from the buffer, reviewed, or not at all.
     pending = todays_pending_draft()
     if pending and not args.stage_only:
         rc = publish_existing(pending)
@@ -993,7 +1566,15 @@ def main(argv: list[str] | None = None) -> int:
         note("----- run finished -----")
         return 1
 
-    prompt = PROMPT_STAGE if args.stage_only else PROMPT_PUBLISH
+    # Only --stage-only reaches this point: every publishing path above has
+    # returned. Writing a paper and publishing it in one unreviewed session
+    # is exactly what the review exists to prevent, so PROMPT_PUBLISH is no
+    # longer used by a scheduled run.
+    if not args.stage_only:
+        note("FAILED: nothing to publish.")
+        note("----- run finished -----")
+        return 1
+    prompt = PROMPT_STAGE
     dois_before = published_dois()
     drafts_before = len(drafts_md())
     seen_before = set(drafts_md())
