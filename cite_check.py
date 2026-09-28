@@ -90,6 +90,15 @@ DOI_API = "https://doi.org/"
 CROSSREF_WORK = "https://api.crossref.org/works/"
 CROSSREF_SEARCH = "https://api.crossref.org/works"
 ARXIV_API = "http://export.arxiv.org/api/query"
+DATACITE_API = "https://api.datacite.org/dois/"
+
+# DOIs registered with DataCite rather than Crossref: arXiv's, and Zenodo's.
+# Crossref answers 404 for every one of them, a real one included.
+DATACITE_PREFIXES = ("10.48550/", "10.5281/")
+
+
+def _datacite_doi(doi):
+    return (doi or "").strip().lower().startswith(DATACITE_PREFIXES)
 
 OK = "OK"
 NOT_FOUND = "NOT-FOUND"
@@ -322,6 +331,36 @@ def lookup_doi(fetcher, doi):
         detail = err or ("HTTP %d from doi.org" % resp.status_code if resp is not None else "no response")
         result = (None, detail)
 
+    # DataCite-registered DOIs - every arXiv DOI among them - are asked of
+    # DataCite itself whenever doi.org does not return the record.
+    #
+    # The Crossref fallback below cannot answer for them: Crossref returns 404
+    # for EVERY DataCite DOI, a real one included, and that 404 was being read
+    # as proof the paper does not exist. On 2026-09-28, under load, five real
+    # arXiv papers in a banked draft - OpenOOD v1.5 and Wild-Time among them -
+    # came back NOT-FOUND ("probably fabricated") and passed minutes later.
+    # A check that could not reach the registry reported a definite no.
+    if result[0] is None and _datacite_doi(doi):
+        resp2, err2 = fetcher.get(
+            DATACITE_API + encoded,
+            headers={"Accept": "application/vnd.citationstyles.csl+json"},
+        )
+        if resp2 is not None and resp2.status_code == 200:
+            try:
+                result = (record_from_csl(resp2.json(), "datacite"), None)
+            except ValueError:
+                result = (None, "datacite returned non-JSON")
+        elif resp2 is not None and resp2.status_code in (404, 410):
+            result = (None, None)      # the registry itself: no such DOI
+        else:
+            detail = err2 or ("HTTP %d" % resp2.status_code if resp2 is not None else "no response")
+            # doi.org's own 404 is not trusted alone for these, for the reason
+            # above, so an unreachable registry leaves the citation UNCHECKED -
+            # which fails the run and retries - never "probably fabricated".
+            result = (None, "%s; datacite: %s" % (result[1] or "doi.org 404", detail))
+        fetcher.cache[key] = result
+        return result
+
     # fall back to Crossref when doi.org did not give us usable JSON
     if result[0] is None and result[1] is not None:
         resp2, err2 = fetcher.get(
@@ -336,7 +375,11 @@ def lookup_doi(fetcher, doi):
             except ValueError:
                 result = (None, "crossref returned non-JSON")
         elif resp2 is not None and resp2.status_code == 404:
-            result = (None, None)
+            # doi.org could not be reached, so this 404 is Crossref's alone.
+            # It means "not a Crossref DOI", not "no such DOI": other agencies
+            # register DOIs too. Leave the citation unchecked rather than call
+            # it missing.
+            result = (None, "%s; crossref: 404, not a Crossref DOI or no such DOI" % result[1])
         else:
             detail = err2 or ("HTTP %d" % resp2.status_code if resp2 is not None else "no response")
             result = (None, "%s; crossref: %s" % (result[1], detail))

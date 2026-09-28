@@ -96,6 +96,17 @@ execution was blocked, and skipped cite_check, publish_paper and the figure
 for the whole paper. `python cite_check.py ...` would have worked. Try
 `python` before concluding anything is unavailable.
 
+Before drafting, check the topic against the author's existing papers: the
+title and the "## Abstract" section of every file in drafts/ (grep them - do
+not read every paper in full). If this topic's central question is
+substantially one the author has already written - the same question in other
+words, or a narrower slice of a paper he already has - do not write it. Mark it
+`- [!] overlaps drafts/<slug>.md` in topics.md with one line saying why, and
+take the next topic. At several papers a day on neighbouring themes, a near
+repeat is the likeliest way for this body of work to get weaker, and no gate
+downstream can see it: the originality check catches copied words, not a
+copied question.
+
 Touch only the paper you are writing: its draft, its figure, daily_log.md
 and topics.md. Do not edit any other draft or any of the pipeline's own
 files. If you find something wrong outside your paper - a count that looks
@@ -132,6 +143,17 @@ on 2026-09-24 a run tried `python3`, was refused, concluded that all code
 execution was blocked, and skipped cite_check, publish_paper and the figure
 for the whole paper. `python cite_check.py ...` would have worked. Try
 `python` before concluding anything is unavailable.
+
+Before drafting, check the topic against the author's existing papers: the
+title and the "## Abstract" section of every file in drafts/ (grep them - do
+not read every paper in full). If this topic's central question is
+substantially one the author has already written - the same question in other
+words, or a narrower slice of a paper he already has - do not write it. Mark it
+`- [!] overlaps drafts/<slug>.md` in topics.md with one line saying why, and
+take the next topic. At several papers a day on neighbouring themes, a near
+repeat is the likeliest way for this body of work to get weaker, and no gate
+downstream can see it: the originality check catches copied words, not a
+copied question.
 
 Touch only the paper you are writing: its draft, its figure, daily_log.md
 and topics.md. Do not edit any other draft or any of the pipeline's own
