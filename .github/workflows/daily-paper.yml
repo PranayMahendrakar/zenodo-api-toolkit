@@ -50,6 +50,10 @@ on:
         description: "Publish a SECOND paper even though today already has one"
         type: boolean
         default: false
+      wait_for_slot:
+        description: "Sent by the server's on-time trigger: wait for the 05:00 / 19:00 IST slot, then publish"
+        type: boolean
+        default: false
 
 # Never two at once. Two concurrent runs would each draft a paper, and the
 # completion guard only helps the one that starts second.
@@ -186,6 +190,32 @@ jobs:
       - name: Unit tests
         working-directory: papers
         run: python tests/test_run_ci.py
+
+      # Started early on purpose. GitHub runs its own schedule late - a median
+      # of about two hours, up to five, measured from 25 Sep 2026 - so the
+      # 19:00 paper went out at 22:54 on the 26th and had not by 21:52 on the
+      # 28th. The web server's hourly cron fires to the second, so at 18:30 and
+      # 04:30 IST it starts this run (see paper-trigger/trigger.sh on the
+      # server), and this step holds it until the slot opens. Every other run
+      # skips it; a run that arrives after the slot does not wait at all.
+      - name: Wait for the publish slot
+        if: github.event_name == 'workflow_dispatch' && inputs.wait_for_slot == true
+        run: |
+          now=$(date +%s)
+          for h in 05 19; do
+            # 15 seconds past the hour, so the runner reads the hour as 05/19.
+            t=$(date -d "today $h:00:15" +%s)
+            if [ "$t" -gt "$now" ]; then
+              wait=$((t - now))
+              if [ "$wait" -le 3600 ]; then
+                echo "waiting $wait seconds for the $h:00 IST slot"
+                sleep "$wait"
+              else
+                echo "the next slot is $((wait / 60)) minutes away - not waiting"
+              fi
+              break
+            fi
+          done
 
       - name: Write the paper
         working-directory: papers
