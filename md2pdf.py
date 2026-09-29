@@ -346,6 +346,7 @@ sup { font-size: 75%; }
          margin-bottom: 9pt; }
 .author { font-size: 11pt; text-align: center; margin-bottom: 2pt; }
 .affil { font-size: 8.5pt; text-align: center; margin-bottom: 9pt; }
+.contact { font-size: 8pt; text-align: center; margin-bottom: 9pt; }
 .rule { border-top: 0.8pt solid #000; margin: 0 0 6pt 0; }
 .abstract p { font-size: 9pt; line-height: 1.3; margin-bottom: 4pt; }
 .keywords { font-size: 8.5pt; margin: 2pt 0 7pt 0; text-align: left; }
@@ -862,6 +863,28 @@ def drop_empty_sections(flow):
     return flow
 
 
+def contact_details(fm, author):
+    """The author's email addresses and phone number for the title block.
+
+    From the paper's front matter (email, email_alt, phone), falling back to
+    paper_defaults.py - but only for a paper by that author: the standing
+    contact details must never be printed on someone else's paper.
+    """
+    try:
+        import paper_defaults
+        own = display_name(author) == display_name(paper_defaults.get("author"))
+    except ImportError:
+        paper_defaults, own = None, False
+    out = []
+    for key in ("email", "email_alt", "phone"):
+        val = fm_meta(fm, key)
+        if not val and own:
+            val = paper_defaults.get(key)
+        if val:
+            out.append(val.strip())
+    return out
+
+
 def build_parts(src, asset_dir=None):
     """The page's content as HTML: the title block, the two-column flow (body
     and references), the spanning blocks, the end matter, and metadata."""
@@ -902,8 +925,14 @@ def build_parts(src, asset_dir=None):
     affil = [x for x in (fm_meta(fm, "affiliation"),
                          ("ORCID " + fm_meta(fm, "orcid")) if fm_meta(fm, "orcid") else "")
              if x]
+    contact = contact_details(fm, author)
     if affil:
-        head += '<p class="affil">%s</p>' % " &#183; ".join(_html.escape(a) for a in affil)
+        head += '<p class="affil"%s>%s</p>' % (
+            ' style="margin-bottom:2pt"' if contact else "",
+            " &#183; ".join(_html.escape(a) for a in affil))
+    if contact:
+        head += '<p class="contact">%s</p>' % " &#183; ".join(
+            _html.escape(c).replace(" ", "&#160;") for c in contact)
     head += '<div class="rule"></div>'
     if abstract:
         ab = to_html(abstract)
@@ -931,7 +960,8 @@ def build_parts(src, asset_dir=None):
             "keywords": "; ".join(keywords), "short": short_title(title),
             "license": copyright_text(fm_get(fm, "copyright") or author, date,
                                       fm_get(fm, "license")),
-            "end_span": len(spans) - 1 if ending else None}
+            "end_span": len(spans) - 1 if ending else None,
+            "contact": contact_details(fm, author), "doi": fm_get(fm, "doi")}
     return (typeset(head), number_blocks(typeset(flow)),
             [typeset(s) for s in spans], meta)
 
@@ -942,9 +972,11 @@ def demote_abstract(head, flow):
                   r'(?:<div class="rule"></div>)?', head)
     if not m:
         return head, flow
+    # No closing rule in the column: it fell at the top of the next column,
+    # away from the abstract it was meant to close.
     moved = m.group(0).replace('<div class="rule"></div>', "")
     return (head[:m.start()] + head[m.end():],
-            number_blocks(moved + '<div class="rule"></div>', prefix="a") + flow)
+            number_blocks(moved, prefix="a") + flow)
 
 
 def end_matter(fm, author):
@@ -1413,6 +1445,15 @@ def finish(out_path, meta, headings):
                       '<p style="font-size:7.5pt;font-style:italic;text-align:right">%s</p>'
                       % _html.escape(meta["venue"]))
         page.draw_line((BODY.x0, head.y1 + 1), (BODY.x1, head.y1 + 1), width=0.4)
+    # Page 1's email addresses, phone number and DOI are live links.
+    first = doc[0]
+    targets = [(c, ("mailto:" if "@" in c else "tel:") + re.sub(r"[^0-9+@.\w-]", "", c))
+               for c in meta.get("contact") or []]
+    if meta.get("doi"):
+        targets.append((meta["doi"], "https://doi.org/" + meta["doi"]))
+    for text, uri in targets:
+        for hit in first.search_for(text.replace(" ", "\u00a0")) or first.search_for(text):
+            first.insert_link({"kind": fitz.LINK_URI, "from": hit, "uri": uri})
     doc.set_metadata({"title": meta["title"], "author": meta["author"],
                       "subject": meta["venue"] or "", "keywords": meta["keywords"],
                       "creator": "md2pdf (two-column)", "producer": "PyMuPDF"})

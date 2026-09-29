@@ -18,6 +18,13 @@ DEFAULTS = {
     "copyright": "Pranay Mahendrakar",
     "orcid": "0009-0003-7224-029X",
     "affiliation": "SONYTECH",
+
+    # Printed in the title block of every paper by this author, under the
+    # affiliation (asked for on 2026-09-29). A paper's own front matter
+    # overrides any of them; set one to "" to leave it off.
+    "email": "pranaymahendrakar@sonytech.in",
+    "email_alt": "mahendrakarpranay@gmail.com",
+    "phone": "+91 6361723454",
     "license": "CC-BY-4.0",
 
     # The author publishes through his own journal, Life of Research.

@@ -133,6 +133,19 @@ check("the venue and date line is on page 1",
 check("the abstract is labelled", "Abstract." in p1, True)
 check("the keywords are listed", "Keywords:" in p1 and "two columns" in p1, True)
 check("the ORCID is on page 1", "0009-0003-7224-029X" in p1, True)
+p1n = p1.replace("\u00a0", " ")
+check("the author's work email is on page 1", "pranaymahendrakar@sonytech.in" in p1n, True)
+check("the second email is on page 1", "mahendrakarpranay@gmail.com" in p1n, True)
+check("the phone number is on page 1, unbroken", "+91 6361723454" in p1n, True)
+uris = [l.get("uri") for l in doc[0].get_links()]
+check("the emails are mailto links",
+      ("mailto:pranaymahendrakar@sonytech.in" in uris,
+       "mailto:mahendrakarpranay@gmail.com" in uris), (True, True))
+check("the phone number is a tel link", "tel:+916361723454" in uris, True)
+check("another author's paper never gets these contact details",
+      M.contact_details("title: T\n", "Doe, Jane"), [])
+check("a paper's own front matter overrides the standing email",
+      M.contact_details("email: me@x.org\nphone: ''\n", "Mahendrakar, Pranay")[0], "me@x.org")
 check("the body's own H1 and author line are not repeated",
       p1.count("A Test Paper About Layout"), 1)
 
@@ -216,6 +229,8 @@ dd = fitz.open(doi_pdf)
 check("a DOI passed at publish time is printed on page 1",
       "DOI 10.5281/zenodo.123456" in dd[0].get_text(), True)
 check("and in the end matter", "DOI: 10.5281/zenodo.123456" in dd[-1].get_text(), True)
+check("the DOI on page 1 is a link",
+      "https://doi.org/10.5281/zenodo.123456" in [l.get("uri") for l in dd[0].get_links()], True)
 check("without touching the markdown on disk",
       "zenodo.123456" in open(src_path, encoding="utf-8").read(), False)
 check("with_doi replaces an existing doi rather than adding a second",
