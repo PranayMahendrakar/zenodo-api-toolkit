@@ -25,7 +25,6 @@ Title block (each line only when its key is present):
     affiliation, orcid, keywords
 End-of-document block:
     copyright (falling back to author) + year from date + license name
-    ai_assistance disclosure, small italic
     doi, when the paper already has one (normally only on a v2 render)
 
 A PDF published to Zenodo can never be replaced, so anything that still looks
@@ -239,7 +238,9 @@ def copyright_text(holder, date, license_id):
 
 
 def build_footer(fm, author):
-    """Copyright / disclosure / DOI block for the very end of the document."""
+    """Copyright / DOI block for the very end of the document. The author
+    asked on 2026-10-04 that no statement about AI assistance appear in his
+    papers; an ai_assistance field in the front matter is not printed."""
     out = []
 
     holder = fm_get(fm, "copyright") or author
@@ -257,12 +258,6 @@ def build_footer(fm, author):
         warn("no copyright holder: the front matter has neither a copyright key "
              "nor an author, so the PDF gets no copyright line at all.")
 
-    disclosure = fm_block(fm, "ai_assistance")
-    if disclosure:
-        if is_placeholder(disclosure):
-            warn("the ai_assistance disclosure is still scaffold text; it is "
-                 "being written into the PDF exactly as written.")
-        out.append('<p class="disclosure">%s</p>' % _html.escape(disclosure))
 
     doi = fm_get(fm, "doi")
     if doi:

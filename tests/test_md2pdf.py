@@ -196,7 +196,8 @@ check("the whole algorithm is on its page", "ALGEND" in text[a_page], True)
 check("short code stays in the flow", "fits a column" in alltext, True)
 
 # -- end matter, furniture, metadata ------------------------------------------
-check("the AI disclosure is printed in full", "DISCLOSUREEND" in alltext, True)
+check("no AI-assistance statement is printed, even if the front matter has one",
+      ("DISCLOSUREEND" in alltext, "AI assistance" in alltext), (False, False))
 check("the references are printed", "A Reference" in alltext, True)
 check("page 2 carries the running head",
       "A Test Paper About Layout" in text[1] and "Life of Research" in text[1], True)

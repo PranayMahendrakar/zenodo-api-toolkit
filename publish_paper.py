@@ -308,7 +308,6 @@ def main():
     title = scalar(fm, "title")
     author = scalar(fm, "author")
     keywords = listing(fm, "keywords")
-    disclosure = block(fm, "ai_assistance")
     abstract = abstract_of(body)
     if not (title and author and abstract):
         die("front matter is missing title, author, or the paper has no ## Abstract")
@@ -391,7 +390,7 @@ def main():
     # Scaffold text is not a decision. None of it may reach a permanent record.
     stale = [(name, val) for name, val in
              (("title", title), ("author", author), ("copyright holder", holder),
-              ("ai_assistance", disclosure), ("orcid", orcid),
+              ("orcid", orcid),
               ("affiliation", affiliation), ("journal_title",
                                              journal.get("journal_title", "")))
              if val and is_placeholder(val)]
@@ -473,9 +472,9 @@ def main():
     if affiliation:
         creator["affiliation"] = affiliation
 
+    # No AI-assistance paragraph: the author asked on 2026-10-04 that no
+    # such statement appear on his records.
     description = "<p>%s</p>" % html.escape(abstract)
-    if disclosure:
-        description += "<p><em>%s</em></p>" % html.escape(disclosure)
 
     # Copyright line, prepended so it is the first thing on the record. Built by
     # md2pdf.copyright_text, which is the same call the renderer makes, so the
@@ -569,13 +568,6 @@ def main():
         # The description is permanent public text, so show what it actually is.
         show("abstract", "%d chars, starts: %s"
              % (len(abstract), (abstract[:70] + "...") if abstract else "(none)"))
-        if disclosure:
-            show("ai_assistance", "%d chars, starts: %s"
-                 % (len(disclosure), disclosure[:70] + "..."))
-        else:
-            show("ai_assistance", "(none - no AI-assistance disclosure on the record)")
-            warnings.append("there is no ai_assistance disclosure. If an assistant was\n"
-                            "           used, say so: the record cannot be un-published.")
         if os.path.isfile(pdf):
             # A dry run does not re-render, so the file on disk may not be the
             # file a real run would upload. Say so rather than quoting a size

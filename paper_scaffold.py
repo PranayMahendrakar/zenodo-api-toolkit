@@ -1141,9 +1141,6 @@ def build_draft(title, genre, authors, keywords, license_id, target, ai_note, da
     # about the text, but publish_paper.py's block() reader is a line regex that
     # matches "key: >" only: written as ">-" the disclosure parses as empty
     # there and never reaches the record description. Verified, not assumed.
-    out.append("ai_assistance: >")
-    for line in wrap(ai_note, width=74, indent="  "):
-        out.append(line)
     out.append("")
     out.append("# ==== PERMANENT RECORD =================================================")
     out.append("# Everything below is copied onto a public Zenodo record and stamped")
