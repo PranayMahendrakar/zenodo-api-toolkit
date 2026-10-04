@@ -226,6 +226,12 @@ Read the paper in full first. Then work through three lenses, in this order.
    nobody here ran, counter-evidence the paper cites and then ignores, internal
    contradictions, a table or figure whose values disagree with the prose, and
    an algorithm block that does not state the decision the paper analyses.
+   The author's standing rules on voice (DAILY_RUN.md, VOICE): the paper
+   describes what the author did ("In this analysis the author reviews and
+   synthesises published results to show ...") and carries no disclaimer of
+   work not done ("We ran no experiments", "no number was measured by its
+   author"), and nothing anywhere about AI assistance or how the paper was
+   produced. Report each such sentence as SERIOUS, with the rewrite.
 
 3. NOVELTY. Compare the paper's central question with the title and the
    "## Abstract" section of every other file in drafts/ (grep them; do not read
