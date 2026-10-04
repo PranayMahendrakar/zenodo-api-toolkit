@@ -599,7 +599,7 @@ def revise(prompt):
 gate_saw = []
 
 
-def fake_regate(draft, run_date):
+def fake_regate(draft, run_date, cli=None, quiet=True):
     gate_saw.append(run_ci.field(draft, "gated"))
     run_ci.stamp(draft, "gated", run_date)
     return True
@@ -708,6 +708,116 @@ check("a review round fits in what a slot leaves",
 
 (run_ci.PROJ, run_ci.DRAFTS, run_ci.REVIEWS, run_ci.TOPICS, run_ci.LOG,
  run_ci.run_session, run_ci.regate, run_ci.RETRY_WAIT) = saved_paths
+
+
+# -- one refused paper must not cost a slot (2026-10-03/04) ------------------
+# A cited preprint was retitled after its paper was gated. The publish gate
+# re-ran cite_check, rightly refused the paper, and the runner retried that
+# same paper at three publish runs while thirteen ready papers waited.
+pb = tempfile.mkdtemp(prefix="run_ci_publish_")
+saved_pub = (run_ci.DRAFTS, run_ci.TOPICS, run_ci.LOG, run_ci.publish_existing,
+             run_ci.gate_report, run_ci.repair_citations, run_ci.PROJ, run_ci.REVIEWS)
+run_ci.DRAFTS = pb
+run_ci.TOPICS = os.path.join(pb, "topics.md")
+run_ci.LOG = os.path.join(pb, "runner.log")
+run_ci.PROJ = pb
+run_ci.REVIEWS = os.path.join(pb, "reviews")
+open(run_ci.TOPICS, "w", encoding="utf-8").write("## Queue\n")
+
+
+def ready_paper(name, written):
+    p = os.path.join(pb, name)
+    open(p, "w", encoding="utf-8").write(
+        "---\ntitle: T\nwritten: %s\ngated: %s\noriginal: %s\nreviewed: %s\n"
+        "review_rounds: 2\n---\n\nbody\n" % ((written,) * 4))
+    return p
+
+
+first = ready_paper("first.md", "2026-09-29")
+second = ready_paper("second.md", "2026-09-30")
+attempts = []
+
+
+def refuse_first(draft):
+    attempts.append(os.path.basename(draft))
+    if draft == first:
+        return 2                                  # cite_check refused it
+    run_ci.stamp(draft, "doi", "10.5281/zenodo.42")
+    return 0
+
+
+run_ci.publish_existing = refuse_first
+check("a slot publishes the next ready paper when the first is refused",
+      (run_ci.publish_from_buffer("2026-10-04"), attempts), (0, ["first.md", "second.md"]))
+check("the refused paper goes back to its gates", run_ci.field(first, "gated"), None)
+check("and the refusal is on record", run_ci.field(first, "publish_refused"), "2026-10-04")
+check("it is no longer in the ready queue", first in run_ci.ready_papers(), False)
+check("it will be re-gated", first in run_ci.ungated_written(), True)
+
+third = ready_paper("third.md", "2026-10-01")
+fourth = ready_paper("fourth.md", "2026-10-02")
+attempts.clear()
+
+
+def reach_zenodo_then_fail(draft):
+    attempts.append(os.path.basename(draft))
+    run_ci.stamp(draft, "deposition", "999")     # got as far as Zenodo
+    return 2
+
+
+run_ci.publish_existing = reach_zenodo_then_fail
+check("a paper that reached Zenodo stops the slot - no second record risked",
+      (run_ci.publish_from_buffer("2026-10-04"), attempts), (1, ["third.md"]))
+check("and is not sent back to its gates", run_ci.field(third, "gated"), "2026-10-01")
+for f in (third, fourth):
+    os.remove(f)
+check("an empty buffer is reported as such", (lambda: None)() is None, True)
+
+# yesterday's shortfall is made up today
+for f in list(os.listdir(pb)):
+    if f.endswith(".md"):
+        os.remove(os.path.join(pb, f))
+open(os.path.join(pb, "a.md"), "w").write("---\ntitle: A\ndate: 2026-10-03\ndoi: 10.5281/zenodo.1\n---\n")
+check("one paper missed yesterday is owed today", run_ci.missed_yesterday("2026-10-04"), 1)
+open(os.path.join(pb, "b.md"), "w").write("---\ntitle: B\ndate: 2026-10-03\ndoi: 10.5281/zenodo.2\n---\n")
+check("nothing is owed after a full day", run_ci.missed_yesterday("2026-10-04"), 0)
+check("a whole missed day owes two, never more",
+      run_ci.missed_yesterday("2026-10-10"), run_ci.DAILY_TARGET)
+
+# a rejected citation is repaired, not retried until held
+REPORT = ("DETAILS\n[MISMATCH] line 1143  10.48550/arXiv.2609.08175\n"
+          "    as written : Old Title\n    found      : New Title\nSUMMARY  OK=64 MISMATCH=1\n")
+check("a MISMATCH is a citation failure the paper can fix",
+      "MISMATCH" in run_ci.citation_failure(REPORT), True)
+check("an unreachable source is not",
+      run_ci.citation_failure("SUMMARY OK=60 UNVERIFIABLE=5\n[UNVERIFIABLE] line 3"), "")
+rp = ready_paper("repaired.md", "2026-09-29")
+run_ci.unstamp(rp, "gated")
+reports = [(False, REPORT), (True, "")]
+def fake_gate_report(d, r):
+    ok, out = reports.pop(0)
+    if ok:                       # publish_paper --gate-only stamps it
+        run_ci.stamp(d, "gated", r)
+    return ok, out
+
+
+run_ci.gate_report = fake_gate_report
+repairs = []
+run_ci.repair_citations = lambda cli, d, findings, quiet: repairs.append(findings) or True
+check("a paper whose citation was repaired is banked",
+      run_ci.regate(rp, "2026-10-04", "cli"), True)
+check("the repair saw the gate's findings", "Old Title" in repairs[0], True)
+check("a repaired paper is not ready until it is reviewed again",
+      (run_ci.field(rp, "reviewed"), run_ci.review_state(rp)), (None, "review"))
+check("and its next review is a new round, not a replay of the old one",
+      run_ci.review_path(rp, int(run_ci.field(rp, "review_rounds")) + 1).endswith(".r3.md"), True)
+run_ci.unstamp(rp, "gated")
+reports[:] = [(False, REPORT)]
+check("without a CLI there is no repair, only a counted failure",
+      (run_ci.regate(rp, "2026-10-04"), len(repairs)), (False, 1))
+
+(run_ci.DRAFTS, run_ci.TOPICS, run_ci.LOG, run_ci.publish_existing,
+ run_ci.gate_report, run_ci.repair_citations, run_ci.PROJ, run_ci.REVIEWS) = saved_pub
 
 
 print("")

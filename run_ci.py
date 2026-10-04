@@ -637,6 +637,35 @@ def publish_existing(draft: str) -> int:
     return proc.returncode
 
 
+def gate_report(draft: str, run_date: str) -> tuple[bool, str]:
+    """gate(), also returning what the gates printed - streamed as it runs."""
+    env = dict(os.environ, ZENODO_RUN_DATE=run_date)
+    rel = os.path.join("drafts", os.path.basename(draft))
+    proc = subprocess.Popen([sys.executable, "publish_paper.py", rel, "--gate-only"],
+                            cwd=PROJ, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                            errors="replace", bufsize=1)
+    chunks = []
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        chunks.append(line)
+    proc.wait()
+    return proc.returncode == 0, "".join(chunks)
+
+
+def citation_failure(report: str) -> str:
+    """The cite_check findings in a gate report that a fix to the paper can
+    cure - a reference that resolves to a different title, or not at all -
+    as opposed to a source that was merely unreachable. "" if none."""
+    lines = [l for l in report.splitlines() if re.match(r"\s*\[(MISMATCH|NOT-FOUND)\]", l)]
+    if not lines:
+        return ""
+    start = report.find("DETAILS")
+    end = report.find("SUMMARY", start)
+    return report[start:end].strip() if start >= 0 and end > start else "\n".join(lines)
+
+
 def gate(draft: str, run_date: str) -> bool:
     """Run every DOI-guarding gate against a draft; stamp `gated:` if they pass.
 
@@ -717,7 +746,7 @@ def mark_published(draft: str, doi: str, day: str) -> bool:
     return False
 
 
-def regate(draft: str, run_date: str) -> bool:
+def regate(draft: str, run_date: str, cli: str | None = None, quiet: bool = True) -> bool:
     """Retry the gates on a paper that is already written.
 
     The attempt is counted BEFORE the gates run, so a crash mid-gate still
@@ -725,13 +754,31 @@ def regate(draft: str, run_date: str) -> bool:
     than retried forever; until then a failure is treated as transient -
     usually arXiv or Crossref unreachable - because nothing written should
     be discarded on one bad morning.
+
+    A citation the gate rejects as a different title, or as not found, is not
+    transient and does not cure itself: on 2026-10-03 a cited preprint was
+    retitled after the paper was gated, and the paper failed three publish
+    slots in a row. Given a CLI, such a failure gets one repair session,
+    which updates the reference and re-checks every claim made of it against
+    the source as it now stands. A repaired paper has changed, so its review
+    is reopened.
     """
     tries = int(field(draft, "gate_tries") or 0) + 1
     stamp(draft, "gate_tries", str(tries))
     name = os.path.basename(draft)
-    if gate(draft, run_date):
+    ok, report = gate_report(draft, run_date)
+    if ok:
         note("banked %s (gate attempt %d)" % (name, tries))
         return True
+    findings = citation_failure(report)
+    repairs = int(field(draft, "citation_repairs") or 0)
+    if findings and cli and repairs < CITATION_REPAIRS:
+        stamp(draft, "citation_repairs", str(repairs + 1))
+        if repair_citations(cli, draft, findings, quiet) and gate_report(draft, run_date)[0]:
+            reopen_review(draft)
+            note("banked %s after repairing its citations; it goes back for review."
+                 % name)
+            return True
     if tries >= GATE_TRIES:
         stamp(draft, "hold", "failed its gates %d times, last on %s" % (tries, run_date))
         note("HELD %s after %d failed gate attempts - it needs a human." % (name, tries))
@@ -739,6 +786,141 @@ def regate(draft: str, run_date: str) -> bool:
         note("%s failed its gates (attempt %d of %d); will retry next slot."
              % (name, tries, GATE_TRIES))
     return False
+
+
+CITATION_REPAIRS = 2      # repair sessions a paper may have for its citations
+
+PROMPT_FIX_CITATIONS = """\
+The citation gate rejected a paper in this repository:
+    drafts/{slug}.md
+
+Its report:
+
+{findings}
+
+For every reference marked MISMATCH or NOT-FOUND, open the record yourself:
+https://arxiv.org/abs/<id> and the full text (https://arxiv.org/html/<id>), or
+doi.org / api.crossref.org for a DOI.
+  * Same identifier, same authors, new title or metadata - the work was
+    revised. Update the reference to the current record, then check EVERY
+    claim the paper attributes to that work against the CURRENT version's
+    text. Correct a claim the current version states differently; remove a
+    claim it no longer supports. Your own words; a source's exact words go in
+    quotation marks with the citation.
+  * The identifier names a different work from the one meant - find the
+    intended work, cite it correctly and check the claims against it. If it
+    cannot be found, remove the reference and every claim that rests on it.
+
+Then run, from the repository root, until both pass:
+    python cite_check.py drafts/{slug}.md --delay 3.0
+    python originality_check.py drafts/{slug}.md
+
+Append to reviews/{slug}.repairs.md what you changed and why, quoting the
+source for each corrected claim. Touch only drafts/{slug}.md, its figure if a
+plotted value changed, and that file. Do not change the front matter. Never
+pass --skip-cite-check or --force-duplicate, and do not run publish_paper.py.
+""" + SESSION_RULES
+
+
+def repair_citations(cli: str, draft: str, findings: str, quiet: bool) -> bool:
+    """One session to fix the citations the gate rejected. True if it ran
+    and changed the paper."""
+    name = os.path.basename(draft)
+    slug = os.path.splitext(name)[0]
+    note("repairing the citations of %s:" % name)
+    for line in findings.splitlines()[:6]:
+        note("        %s" % line.strip()[:110])
+    saved_fm = front_matter_lines(draft)
+    with open(draft, "rb") as fh:
+        before = fh.read()
+    snap = snapshot()
+
+    def changed() -> bool:
+        with open(draft, "rb") as fh:
+            return fh.read() != before
+
+    os.makedirs(REVIEWS, exist_ok=True)
+    outcome = run_session(cli, PROMPT_FIX_CITATIONS.format(slug=slug, findings=findings),
+                          quiet, changed)
+    for p in restore(snap, allow=(draft,)):
+        note("        the repair changed %s; undone" % os.path.basename(p))
+    if saved_fm and put_front_matter(draft, saved_fm):
+        note("        the repair changed the front matter; restored it")
+    if outcome != "ok":
+        note("        the repair session did not complete (%s)." % outcome)
+        return False
+    return True
+
+
+def reopen_review(draft: str) -> None:
+    """A paper changed after it passed review goes back for one more round."""
+    if not field(draft, "reviewed"):
+        return
+    rounds = int(field(draft, "review_rounds") or 0)
+    unstamp(draft, "reviewed")
+    stamp(draft, "review_rounds", str(rounds))
+    stamp(draft, "review_verdict", "REVISE")
+    stamp(draft, "revised_round", str(rounds))
+    stamp(draft, "review_tries", "0")
+
+
+def missed_yesterday(today: str | None = None) -> int:
+    """Papers yesterday's two slots should have published and did not.
+
+    Each is made up today, one per publish run, so a failed slot costs a
+    delay rather than a paper. Only yesterday counts: a longer outage is not
+    turned into a flood of papers on one day.
+    """
+    today = today or _dt.date.today().isoformat()
+    yesterday = (_dt.date.fromisoformat(today) - _dt.timedelta(days=1)).isoformat()
+    return max(0, DAILY_TARGET - todays_published_count(yesterday))
+
+
+PUBLISH_TRIES = 3         # ready papers a slot may try before it gives up
+
+
+def publish_from_buffer(run_date: str) -> int | None:
+    """Publish the oldest ready paper; if it is refused before anything
+    reaches Zenodo, send it back to its gates and try the next.
+
+    One refused paper used to fail the slot: on 2026-10-03 and 04 the same
+    paper - a cited preprint retitled after it was gated - was retried and
+    refused at three publish runs while thirteen ready papers waited behind
+    it. Returns 0 published, 1 failed, None if nothing was ready.
+    """
+    ready = ready_papers()
+    if not ready:
+        return None
+    for paper in ready[:PUBLISH_TRIES]:
+        note("publishing from the buffer: %s (written %s, gated %s, reviewed %s)"
+             % (os.path.basename(paper), field(paper, "written") or "?",
+                field(paper, "gated") or "?", field(paper, "reviewed") or "?"))
+        rc = publish_existing(paper)
+        minted = draft_doi(paper)
+        if resume_succeeded(rc, minted):
+            note("OK: published %s - https://doi.org/%s" % (minted, minted))
+            mark_published(paper, minted, run_date)
+            note("        buffer now holds %d." % len(ready_papers()))
+            return 0
+        if field(paper, "deposition") or in_flight():
+            note("FAILED: %s reached Zenodo and its outcome is unknown (exit %d)."
+                 % (os.path.basename(paper), rc))
+            note("        Publishing nothing else until it is resolved.")
+            return 1
+        # Refused before anything reached Zenodo. Its gates passed when it
+        # was banked, so something changed since - most often a cited source.
+        # Back to its gates, where a rejected citation is repaired, and on to
+        # the next paper now.
+        unstamp(paper, "gated")
+        unstamp(paper, "original")
+        stamp(paper, "gate_tries", "0")
+        stamp(paper, "publish_refused", run_date)
+        note("        %s was refused (exit %d) before reaching Zenodo; it goes"
+             % (os.path.basename(paper), rc))
+        note("        back to its gates, and the next ready paper is tried.")
+    note("FAILED: %d ready paper(s) were refused this slot. The gates above say why."
+         % min(len(ready), PUBLISH_TRIES))
+    return 1
 
 
 def classify(output: str) -> str:
@@ -1090,7 +1272,7 @@ def review_step(cli: str, draft: str, run_date: str, quiet: bool) -> str:
         unstamp(draft, "original")
         stamp(draft, "gate_tries", "0")
         stamp(draft, "review_tries", "0")
-        if regate(draft, run_date):
+        if regate(draft, run_date, cli, quiet):
             return "revised"
         return "failed"
 
@@ -1254,7 +1436,7 @@ def work(cli: str, run_date: str, quiet: bool, want: int, quota: bool,
         return not (quota and written_today(run_date) >= DAILY_WRITES)
 
     for draft in ungated_written():
-        if regate(draft, run_date):
+        if regate(draft, run_date, cli, quiet):
             progressed = True
     checkpoint("gates")
 
@@ -1295,7 +1477,7 @@ def work(cli: str, run_date: str, quiet: bool, want: int, quota: bool,
                  % os.path.basename(draft))
             note("        rather than risk drafting the same topic twice.")
             break
-        regate(draft, run_date)
+        regate(draft, run_date, cli, quiet)
         checkpoint("wrote %s" % os.path.basename(draft))
         # Review it now if there is time; otherwise the next slot does.
         if review_pending(run_date, cli, quiet, yield_to_slot, only=draft) == "down":
@@ -1339,6 +1521,8 @@ def main(argv: list[str] | None = None) -> int:
     already = todays_published_doi()
     done_today = todays_published_count()
     target = target_for()
+    owed = missed_yesterday() if target else 0
+    target += owed
     # "Enough for now", not "any at all": with two slots a day the question is
     # whether this slot's paper exists, not whether the day has one.
     satisfied = done_today >= target
@@ -1531,23 +1715,12 @@ def main(argv: list[str] | None = None) -> int:
                 note("----- run finished -----")
                 return 1
         if ready:
-            paper = ready[0]
-            note("publishing from the buffer: %s (written %s, gated %s, reviewed %s)"
-                 % (os.path.basename(paper), field(paper, "written") or "?",
-                    field(paper, "gated") or "?", field(paper, "reviewed") or "?"))
-            rc = publish_existing(paper)
-            minted = draft_doi(paper)
-            if resume_succeeded(rc, minted):
-                note("OK: published %s - https://doi.org/%s" % (minted, minted))
-                mark_published(paper, minted, run_date)
-                note("        buffer now holds %d." % len(ready_papers()))
-                note("----- run finished -----")
-                return 0
-            note("FAILED: could not publish %s (exit %d)."
-                 % (os.path.basename(paper), rc))
-            note("        The gates above say why. Nothing was written twice.")
+            if owed:
+                note("making up %d paper(s) yesterday's slots did not publish." % owed)
+            result = publish_from_buffer(run_date)
+            checkpoint("publish")
             note("----- run finished -----")
-            return 1
+            return 1 if result is None else result
         note("no pipeline paper is ready; publishing a hand-made draft dated today.")
 
     # A draft dated today that the pipeline did not write - one a person made
