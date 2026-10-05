@@ -820,6 +820,55 @@ check("without a CLI there is no repair, only a counted failure",
  run_ci.gate_report, run_ci.repair_citations, run_ci.PROJ, run_ci.REVIEWS) = saved_pub
 
 
+# -- a run alive before a slot waits for it (2026-10-05) ------------------------
+# GitHub queued the 19:00 IST run 3h46m late; a run alive at 18:02 had exited.
+hs = tempfile.mkdtemp(prefix="run_ci_hold_")
+saved_hold = (run_ci.DRAFTS, run_ci.LOG, run_ci.minutes_to_next_publish,
+              run_ci.minutes_left, run_ci.time.sleep, run_ci.checkpoint,
+              os.environ.get("GITHUB_ACTIONS"))
+run_ci.DRAFTS = hs
+run_ci.LOG = os.path.join(hs, "runner.log")
+open(os.path.join(hs, "r.md"), "w").write(
+    "---\ntitle: T\nwritten: 2026-10-01\ngated: 2026-10-01\nreviewed: 2026-10-01\n---\nb\n")
+slept = []
+run_ci.time.sleep = lambda s: slept.append(s)
+run_ci.checkpoint = lambda what: None
+run_ci.minutes_left = lambda: run_ci.RUN_MINUTES - 5          # 5 minutes into the run
+
+
+def hold(wait, ci=True, fresh=True):
+    run_ci.minutes_to_next_publish = lambda now=None: wait
+    if fresh:
+        run_ci._held = False
+    if ci:
+        os.environ["GITHUB_ACTIONS"] = "true"
+    else:
+        os.environ.pop("GITHUB_ACTIONS", None)
+    slept.clear()
+    return run_ci.hold_for_slot(), list(slept)
+
+
+check("a run 58 minutes before a slot waits for it, to the second",
+      hold(58), (True, [58 * 60 + 15]))
+check("it holds only once per run", hold(30, fresh=False), (False, []))
+check("a slot hours away is not waited for", hold(300), (False, []))
+check("nothing holds outside CI", hold(30, ci=False), (False, []))
+run_ci.minutes_left = lambda: run_ci.RUN_MINUTES - 250        # deep into a long run
+check("a run with too little job time left does not hold and get cut off",
+      hold(100), (False, []))
+run_ci.minutes_left = lambda: run_ci.RUN_MINUTES - 5
+os.remove(os.path.join(hs, "r.md"))
+check("with nothing reviewed to publish there is no point holding", hold(30), (False, []))
+
+(run_ci.DRAFTS, run_ci.LOG, run_ci.minutes_to_next_publish, run_ci.minutes_left,
+ run_ci.time.sleep, run_ci.checkpoint, _ga) = saved_hold
+if _ga is None:
+    os.environ.pop("GITHUB_ACTIONS", None)
+else:
+    os.environ["GITHUB_ACTIONS"] = _ga
+run_ci._held = False
+
+
 print("")
 print("%d passed%s" % (PASS, ", %d FAILED" % FAIL if FAIL else ""))
 sys.exit(1 if FAIL else 0)

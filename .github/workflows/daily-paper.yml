@@ -32,6 +32,14 @@ on:
     - cron: "30 2 * * *"    # 08:00 IST - morning retry
     - cron: "30 5 * * *"    # 11:00 IST - morning retry
     - cron: "30 8 * * *"    # 14:00 IST - morning retry
+    # Started BEFORE the slot on purpose. GitHub starts scheduled runs when
+    # it has capacity - 19:00 IST went out at 19:05, 20:25, 21:03, 19:50 and
+    # 22:45 in one week. A run that is alive within 110 minutes of a slot
+    # holds for it (run_ci.hold_for_slot) and publishes on time, so these
+    # only need to START before the slot, not at it.
+    - cron: "7 11 * * *"    # 16:37 IST - early start for the evening slot
+    - cron: "37 11 * * *"   # 17:07 IST - early start for the evening slot
+    - cron: "37 12 * * *"   # 18:07 IST - early start for the evening slot
     - cron: "30 13 * * *"   # 19:00 IST - EVENING paper
     - cron: "30 15 * * *"   # 21:00 IST - evening retry
     - cron: "30 17 * * *"   # 23:00 IST - evening retry
@@ -40,6 +48,7 @@ on:
     # up while nothing is waiting on it.
     - cron: "30 19 * * *"   # 01:00 IST - writer
     - cron: "30 21 * * *"   # 03:00 IST - writer
+    - cron: "37 22 * * *"   # 04:07 IST - early start for the morning slot
   workflow_dispatch:
     inputs:
       stage_only:

@@ -929,6 +929,41 @@ def publish_from_buffer(run_date: str) -> int | None:
     return 1
 
 
+HOLD_MINUTES = 110        # a run this close to a publish slot waits for it
+JOB_MINUTES = 320         # what a run may use of the job's 340-minute cap
+_held = False
+
+
+def hold_for_slot() -> bool:
+    """Wait for a publish slot that opens soon, so the paper goes out on time.
+
+    GitHub starts scheduled runs when it has capacity, not when they are
+    due: the 19:00 IST paper went out at 19:05, 20:25, 21:03, 19:50 and, on
+    2026-10-05, 22:45 - when the 19:00 run was queued 3h46m late while a run
+    that had been alive at 18:02 found nothing to do and exited. A run that
+    is already running cannot be started late. So a run that has finished
+    its own work with a slot opening within HOLD_MINUTES stays alive, sleeps
+    to the slot and publishes at it. In CI only, once per run, and only when
+    a reviewed paper is waiting and the job's time allows.
+    """
+    global _held
+    if _held or os.environ.get("GITHUB_ACTIONS") != "true":
+        return False
+    wait = minutes_to_next_publish()
+    elapsed = RUN_MINUTES - minutes_left()
+    if wait > HOLD_MINUTES or elapsed + wait + 20 > JOB_MINUTES:
+        return False
+    if not ready_papers() or in_flight():
+        return False
+    _held = True
+    note("the next publish slot opens in %d minutes; holding this run for it"
+         % wait)
+    note("        (GitHub starts scheduled runs late; this one is already running).")
+    checkpoint("before holding for the slot")
+    time.sleep(wait * 60 + 15)
+    return True
+
+
 def classify(output: str) -> str:
     """terminal | transient | clean, judged on the tail only."""
     tail = "\n".join(output.splitlines()[-TAIL_LINES:])
@@ -1646,6 +1681,8 @@ def main(argv: list[str] | None = None) -> int:
             note("        Nothing to do - this slot is finished. Written today %d"
                  % wrote_today)
             note("        of %d, %d ready, none awaiting review." % (DAILY_WRITES, banked))
+            if hold_for_slot():
+                return main(argv)
             note("----- run finished -----")
             return 0
         note("        Nothing to publish, so reviewing and writing ahead: %d of %d"
@@ -1699,6 +1736,8 @@ def main(argv: list[str] | None = None) -> int:
         note("writer finished: %d written, %d written today, %d ready, %d"
              " awaiting review." % (wrote, written_today(run_date),
                                     len(ready_papers()), len(review_queue())))
+        if not down and getattr(args, "quota", False) and hold_for_slot():
+            return main(argv)
         note("----- run finished -----")
         return 1 if down else 0
 
