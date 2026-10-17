@@ -30,7 +30,7 @@ DEFAULTS = {
     # The author publishes through his own journal, Life of Research.
     # publication_type "article" is what makes Zenodo show "Journal article"
     # rather than "Preprint"; journal_title is what names the venue.
-    "publication_type": "article",
+    "publication_type": "preprint",
     "journal_title": "Life of Research",
 
     # Left empty on purpose: inventing a volume, issue or page range would be
