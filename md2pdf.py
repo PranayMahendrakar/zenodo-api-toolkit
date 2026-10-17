@@ -201,7 +201,7 @@ def venue_line(fm):
         return ", ".join(bits)
     ptype = fm_get(fm, "publication_type").lower()
     # A preprint carries no journal, but the author's repository name heads
-    # it: "Life of Research - Open Research Repository - Preprint".
+    # it: "Life of Research".
     series = fm_get(fm, "series")
     if not series:
         try:
@@ -209,8 +209,8 @@ def venue_line(fm):
             series = paper_defaults.get("series")
         except ImportError:
             series = ""
-    if series and ptype in PUB_TYPE_LABELS:
-        return "%s · %s" % (series, PUB_TYPE_LABELS[ptype])
+    if series:
+        return series
     if not ptype:
         return series or ""
     if ptype not in PUB_TYPE_LABELS:

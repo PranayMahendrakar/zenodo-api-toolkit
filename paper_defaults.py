@@ -34,7 +34,7 @@ DEFAULTS = {
     "journal_title": "",
     # Shown on page 1 and atop each record: the author's open research
     # repository, which his preprints belong to (asked 2026-10-18).
-    "series": "Life of Research · Open Research Repository",
+    "series": "Life of Research",
 
     # Left empty on purpose: inventing a volume, issue or page range would be
     # asserting something untrue about a venue that does not paginate.
