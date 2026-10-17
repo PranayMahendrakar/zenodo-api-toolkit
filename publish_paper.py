@@ -475,6 +475,9 @@ def main():
     # No AI-assistance paragraph: the author asked on 2026-10-04 that no
     # such statement appear on his records.
     description = "<p>%s</p>" % html.escape(abstract)
+    series = scalar(fm, "series") or paper_defaults.get("series")
+    if series:
+        description = "<p><strong>%s</strong></p>" % html.escape(series) + description
 
     # Copyright line, prepended so it is the first thing on the record. Built by
     # md2pdf.copyright_text, which is the same call the renderer makes, so the
