@@ -31,7 +31,7 @@ DEFAULTS = {
     # publication_type "article" is what makes Zenodo show "Journal article"
     # rather than "Preprint"; journal_title is what names the venue.
     "publication_type": "preprint",
-    "journal_title": "Life of Research",
+    "journal_title": "",
 
     # Left empty on purpose: inventing a volume, issue or page range would be
     # asserting something untrue about a venue that does not paginate.
